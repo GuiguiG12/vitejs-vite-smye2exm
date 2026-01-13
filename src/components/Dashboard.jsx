@@ -6,7 +6,7 @@ import { arbitrum, base } from 'thirdweb/chains';
 
 const client = createThirdwebClient({ clientId: 'ef76c96ae163aba05ebd7e20d94b81fd' });
 
-const API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/FIRECRAWL_DATA';
+const API_URL = '';
 
 // Supabase direct REST API
 const SUPABASE_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co';
