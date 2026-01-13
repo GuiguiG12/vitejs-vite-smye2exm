@@ -1,8 +1,45 @@
 import { useState, useEffect } from 'react';
 import { useDisconnect, useActiveWallet } from 'thirdweb/react';
+import { getContract, readContract, prepareContractCall, sendTransaction } from 'thirdweb';
+import { createThirdwebClient } from 'thirdweb';
+import { arbitrum, base } from 'thirdweb/chains';
+
+const client = createThirdwebClient({ clientId: 'ef76c96ae163aba05ebd7e20d94b81fd' });
 
 const API_URL =
   'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/FIRECRAWL_DATA';
+
+// ========== ENZYME VAULT CONFIGURATION ==========
+const ENZYME_VAULTS = {
+  arb: {
+    vaultProxy: '0x591e7194fee6f5615ea89000318e630eab92fbe1',
+    denominationAsset: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', // USDC on Arbitrum
+    chain: arbitrum,
+    enzymeUrl: 'https://app.enzyme.finance/vault/0x591e7194fee6f5615ea89000318e630eab92fbe1?network=arbitrum'
+  },
+  base: {
+    vaultProxy: null, // Not yet configured
+    denominationAsset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+    chain: base,
+    enzymeUrl: null
+  }
+};
+
+// Minimal ABIs
+const VAULT_ABI = [
+  { name: 'getAccessor', type: 'function', inputs: [], outputs: [{ type: 'address' }], stateMutability: 'view' },
+  { name: 'balanceOf', type: 'function', inputs: [{ name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }], stateMutability: 'view' },
+];
+
+const COMPTROLLER_ABI = [
+  { name: 'buyShares', type: 'function', inputs: [{ name: '_investmentAmount', type: 'uint256' }, { name: '_minSharesQuantity', type: 'uint256' }], outputs: [{ type: 'uint256' }], stateMutability: 'nonpayable' },
+  { name: 'redeemSharesForSpecificAssets', type: 'function', inputs: [{ name: '_recipient', type: 'address' }, { name: '_sharesQuantity', type: 'uint256' }, { name: '_payoutAssets', type: 'address[]' }, { name: '_payoutAssetPercentages', type: 'uint256[]' }], outputs: [{ type: 'address[]' }, { type: 'uint256[]' }], stateMutability: 'nonpayable' },
+];
+
+const ERC20_ABI = [
+  { name: 'approve', type: 'function', inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ type: 'bool' }], stateMutability: 'nonpayable' },
+  { name: 'balanceOf', type: 'function', inputs: [{ name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }], stateMutability: 'view' },
+];
 
 function Dashboard({ address }) {
   const { disconnect } = useDisconnect();
@@ -13,6 +50,19 @@ function Dashboard({ address }) {
   );
   const [vaultData, setVaultData] = useState({ arb: null, base: null });
   const [loading, setLoading] = useState(true);
+
+  // User balances from blockchain
+  const [userVaultBalances, setUserVaultBalances] = useState({ arb: 0n, base: 0n });
+  const [userUsdcBalances, setUserUsdcBalances] = useState({ arb: 0n, base: 0n });
+  const [comptrollerAddresses, setComptrollerAddresses] = useState({ arb: null, base: null });
+
+  // Modal state
+  const [depositModal, setDepositModal] = useState({ open: false, vault: 'arb' });
+  const [redeemModal, setRedeemModal] = useState({ open: false, vault: 'arb' });
+  const [depositAmount, setDepositAmount] = useState('');
+  const [redeemAmount, setRedeemAmount] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [notification, setNotification] = useState(null);
 
   // Format helpers
   const fmtUsd = (v) => {
@@ -35,13 +85,18 @@ function Dashboard({ address }) {
     : '';
   const avatarText = address ? address.slice(2, 4).toUpperCase() : '0x';
 
+  const showNotification = (message, type = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 4000);
+  };
+
   // Theme toggle
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('g12-theme', theme);
   }, [theme]);
 
-  // Fetch vault data
+  // Fetch vault data from API
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
@@ -61,6 +116,147 @@ function Dashboard({ address }) {
     fetchData();
   }, []);
 
+  // Fetch user balances from blockchain
+  useEffect(() => {
+    async function fetchUserBalances() {
+      if (!address) return;
+
+      // Arbitrum vault
+      if (ENZYME_VAULTS.arb.vaultProxy) {
+        try {
+          const vaultContract = getContract({ client, chain: arbitrum, address: ENZYME_VAULTS.arb.vaultProxy, abi: VAULT_ABI });
+          const shareBalance = await readContract({ contract: vaultContract, method: 'balanceOf', params: [address] });
+          const comptroller = await readContract({ contract: vaultContract, method: 'getAccessor', params: [] });
+          
+          const usdcContract = getContract({ client, chain: arbitrum, address: ENZYME_VAULTS.arb.denominationAsset, abi: ERC20_ABI });
+          const usdcBalance = await readContract({ contract: usdcContract, method: 'balanceOf', params: [address] });
+
+          setUserVaultBalances(prev => ({ ...prev, arb: shareBalance }));
+          setUserUsdcBalances(prev => ({ ...prev, arb: usdcBalance }));
+          setComptrollerAddresses(prev => ({ ...prev, arb: comptroller }));
+          
+          console.log('Arbitrum balances:', { shares: Number(shareBalance) / 1e18, usdc: Number(usdcBalance) / 1e6, comptroller });
+        } catch (err) {
+          console.error('Failed to fetch Arbitrum balances:', err);
+        }
+      }
+    }
+    fetchUserBalances();
+  }, [address]);
+
+  // Calculate user's vault value in USD
+  const getUserVaultValue = (vaultKey) => {
+    const shares = Number(userVaultBalances[vaultKey]) / 1e18;
+    const sharePrice = vaultData[vaultKey]?.share_price || 1;
+    return shares * sharePrice;
+  };
+
+  const totalBalance = getUserVaultValue('arb') + getUserVaultValue('base');
+
+  // Deposit function
+  const handleDeposit = async () => {
+    const vaultKey = depositModal.vault;
+    const vault = ENZYME_VAULTS[vaultKey];
+    
+    if (!vault?.vaultProxy) {
+      showNotification('This vault is not yet available', 'error');
+      return;
+    }
+
+    if (!depositAmount || parseFloat(depositAmount) <= 0) {
+      showNotification('Please enter a valid amount', 'error');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const account = await wallet.getAccount();
+      const amount = BigInt(Math.floor(parseFloat(depositAmount) * 1e6)); // USDC 6 decimals
+
+      // Check balance
+      if (userUsdcBalances[vaultKey] < amount) {
+        showNotification('Insufficient USDC balance', 'error');
+        return;
+      }
+
+      const comptrollerAddr = comptrollerAddresses[vaultKey];
+      if (!comptrollerAddr) {
+        showNotification('Could not find vault comptroller', 'error');
+        return;
+      }
+
+      // Approve
+      const usdcContract = getContract({ client, chain: vault.chain, address: vault.denominationAsset, abi: ERC20_ABI });
+      const approveTx = prepareContractCall({ contract: usdcContract, method: 'approve', params: [comptrollerAddr, amount] });
+      await sendTransaction({ transaction: approveTx, account });
+
+      // Deposit
+      const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
+      const depositTx = prepareContractCall({ contract: comptrollerContract, method: 'buyShares', params: [amount, 1n] });
+      await sendTransaction({ transaction: depositTx, account });
+
+      showNotification(`Successfully deposited ${depositAmount} USDC!`, 'success');
+      setDepositModal({ open: false, vault: 'arb' });
+      setDepositAmount('');
+      
+      // Refresh balances
+      window.location.reload();
+    } catch (err) {
+      console.error('Deposit error:', err);
+      showNotification(err.message || 'Deposit failed', 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Redeem function
+  const handleRedeem = async () => {
+    const vaultKey = redeemModal.vault;
+    const vault = ENZYME_VAULTS[vaultKey];
+    
+    if (!vault?.vaultProxy) {
+      showNotification('This vault is not yet available', 'error');
+      return;
+    }
+
+    if (!redeemAmount || parseFloat(redeemAmount) <= 0) {
+      showNotification('Please enter a valid amount', 'error');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const account = await wallet.getAccount();
+      const sharesAmount = BigInt(Math.floor(parseFloat(redeemAmount) * 1e18)); // 18 decimals
+
+      if (userVaultBalances[vaultKey] < sharesAmount) {
+        showNotification('Insufficient vault shares', 'error');
+        return;
+      }
+
+      const comptrollerAddr = comptrollerAddresses[vaultKey];
+      const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
+      
+      const redeemTx = prepareContractCall({
+        contract: comptrollerContract,
+        method: 'redeemSharesForSpecificAssets',
+        params: [address, sharesAmount, [vault.denominationAsset], [10000n]]
+      });
+      await sendTransaction({ transaction: redeemTx, account });
+
+      showNotification(`Successfully redeemed ${redeemAmount} shares!`, 'success');
+      setRedeemModal({ open: false, vault: 'arb' });
+      setRedeemAmount('');
+      
+      window.location.reload();
+    } catch (err) {
+      console.error('Redeem error:', err);
+      showNotification(err.message || 'Redemption failed', 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleLogout = async () => {
     if (wallet) {
       await disconnect(wallet);
@@ -76,6 +272,115 @@ function Dashboard({ address }) {
 
   return (
     <div className="dashboard">
+      {/* Notification */}
+      {notification && (
+        <div className={`notification ${notification.type}`}>
+          {notification.type === 'success' ? '✅' : notification.type === 'error' ? '❌' : 'ℹ️'} {notification.message}
+        </div>
+      )}
+
+      {/* Deposit Modal */}
+      {depositModal.open && (
+        <div className="modal-overlay" onClick={() => setDepositModal({ open: false, vault: 'arb' })}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setDepositModal({ open: false, vault: 'arb' })}>✕</button>
+            <h2 className="modal-title">Deposit Funds</h2>
+            <p className="modal-desc">Deposit USDC into the vault to start earning yield.</p>
+            
+            <div className="input-group">
+              <label className="input-label">Select Vault</label>
+              <select 
+                className="input-field" 
+                value={depositModal.vault}
+                onChange={(e) => setDepositModal({ ...depositModal, vault: e.target.value })}
+              >
+                <option value="arb">DeFi Yield (Arbitrum) - TEST</option>
+                <option value="base" disabled>Stable Yield (Base) - Coming Soon</option>
+              </select>
+            </div>
+            
+            <div className="input-group">
+              <label className="input-label">Amount (USDC)</label>
+              <input 
+                type="number" 
+                className="input-field" 
+                placeholder="0.00" 
+                value={depositAmount}
+                onChange={(e) => setDepositAmount(e.target.value)}
+              />
+              <div className="input-helper">
+                <span>Balance: {(Number(userUsdcBalances[depositModal.vault]) / 1e6).toFixed(2)} USDC</span>
+                <span 
+                  className="max-btn"
+                  onClick={() => setDepositAmount((Number(userUsdcBalances[depositModal.vault]) / 1e6).toFixed(2))}
+                >
+                  MAX
+                </span>
+              </div>
+            </div>
+            
+            <button 
+              className="btn btn-primary btn-block" 
+              onClick={handleDeposit}
+              disabled={isProcessing}
+            >
+              {isProcessing ? '⏳ Processing...' : '✅ Confirm Deposit'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Redeem Modal */}
+      {redeemModal.open && (
+        <div className="modal-overlay" onClick={() => setRedeemModal({ open: false, vault: 'arb' })}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setRedeemModal({ open: false, vault: 'arb' })}>✕</button>
+            <h2 className="modal-title">Request Redemption</h2>
+            <p className="modal-desc">Withdraw your funds from the vault.</p>
+            
+            <div className="input-group">
+              <label className="input-label">Select Vault</label>
+              <select 
+                className="input-field" 
+                value={redeemModal.vault}
+                onChange={(e) => setRedeemModal({ ...redeemModal, vault: e.target.value })}
+              >
+                <option value="arb">DeFi Yield (Arbitrum) - TEST</option>
+                <option value="base" disabled>Stable Yield (Base) - Coming Soon</option>
+              </select>
+            </div>
+            
+            <div className="input-group">
+              <label className="input-label">Amount (Shares)</label>
+              <input 
+                type="number" 
+                className="input-field" 
+                placeholder="0.00" 
+                value={redeemAmount}
+                onChange={(e) => setRedeemAmount(e.target.value)}
+              />
+              <div className="input-helper">
+                <span>Your shares: {(Number(userVaultBalances[redeemModal.vault]) / 1e18).toFixed(6)}</span>
+                <span 
+                  className="max-btn"
+                  onClick={() => setRedeemAmount((Number(userVaultBalances[redeemModal.vault]) / 1e18).toFixed(6))}
+                >
+                  MAX
+                </span>
+              </div>
+            </div>
+            
+            <button 
+              className="btn btn-primary btn-block" 
+              onClick={handleRedeem}
+              disabled={isProcessing}
+            >
+              {isProcessing ? '⏳ Processing...' : '✅ Confirm Redemption'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-header">
@@ -182,7 +487,7 @@ function Dashboard({ address }) {
               <div className="stats-grid">
                 <div className="stat-card">
                   <div className="stat-label">💰 Total Balance</div>
-                  <div className="stat-value">$0.00</div>
+                  <div className="stat-value">{fmtUsd(totalBalance)}</div>
                   <div className="stat-change positive">—</div>
                 </div>
                 <div className="stat-card">
@@ -196,7 +501,7 @@ function Dashboard({ address }) {
                 </div>
                 <div className="stat-card">
                   <div className="stat-label">🪙 Total Deposits</div>
-                  <div className="stat-value">$0.00</div>
+                  <div className="stat-value">{fmtUsd(totalBalance)}</div>
                   <div className="stat-change">0 transactions</div>
                 </div>
                 <div className="stat-card">
@@ -213,8 +518,8 @@ function Dashboard({ address }) {
                   <div className="card-title">⚡ Quick Actions</div>
                 </div>
                 <div className="quick-actions">
-                  <button className="btn btn-primary">➕ Deposit</button>
-                  <button className="btn btn-secondary">➖ Redeem</button>
+                  <button className="btn btn-primary" onClick={() => setDepositModal({ open: true, vault: 'arb' })}>➕ Deposit</button>
+                  <button className="btn btn-secondary" onClick={() => setRedeemModal({ open: true, vault: 'arb' })}>➖ Redeem</button>
                   <a
                     href="https://widget.mtpelerin.com/?type=web&lang=en&tab=buy&bdc=USDC&net=ARBITRUM&amt=500&cur=EUR"
                     target="_blank"
@@ -238,7 +543,7 @@ function Dashboard({ address }) {
                     <div className="vault-name">
                       <div className="vault-icon arb">📈</div>
                       <div>
-                        <div className="vault-title">DeFi Yield</div>
+                        <div className="vault-title">DeFi Yield <span className="test-badge">TEST</span></div>
                         <div className="vault-network">Arbitrum</div>
                       </div>
                     </div>
@@ -255,7 +560,7 @@ function Dashboard({ address }) {
                     <div className="vault-stats">
                       <div>
                         <div className="vault-stat-label">Your Balance</div>
-                        <div className="vault-stat-value">$0.00</div>
+                        <div className="vault-stat-value">{fmtUsd(getUserVaultValue('arb'))}</div>
                       </div>
                       <div>
                         <div className="vault-stat-label">Share Price</div>
@@ -273,17 +578,19 @@ function Dashboard({ address }) {
                       </div>
                     </div>
                     <div className="vault-actions">
-                      <button className="btn btn-primary btn-sm">
+                      <button className="btn btn-primary btn-sm" onClick={() => setDepositModal({ open: true, vault: 'arb' })}>
                         ➕ Deposit
                       </button>
-                      <button className="btn btn-secondary btn-sm">
+                      <button className="btn btn-secondary btn-sm" onClick={() => setRedeemModal({ open: true, vault: 'arb' })}>
                         ➖ Redeem
                       </button>
                       <a
-                        href="/strategies.html"
+                        href={ENZYME_VAULTS.arb.enzymeUrl}
+                        target="_blank"
+                        rel="noreferrer"
                         className="btn btn-secondary btn-sm"
                       >
-                        ℹ️ Details
+                        🔗 Details
                       </a>
                     </div>
                   </div>
@@ -312,7 +619,7 @@ function Dashboard({ address }) {
                     <div className="vault-stats">
                       <div>
                         <div className="vault-stat-label">Your Balance</div>
-                        <div className="vault-stat-value">$0.00</div>
+                        <div className="vault-stat-value">{fmtUsd(getUserVaultValue('base'))}</div>
                       </div>
                       <div>
                         <div className="vault-stat-label">Share Price</div>
@@ -332,10 +639,10 @@ function Dashboard({ address }) {
                       </div>
                     </div>
                     <div className="vault-actions">
-                      <button className="btn btn-primary btn-sm">
+                      <button className="btn btn-primary btn-sm" disabled>
                         ➕ Deposit
                       </button>
-                      <button className="btn btn-secondary btn-sm">
+                      <button className="btn btn-secondary btn-sm" disabled>
                         ➖ Redeem
                       </button>
                       <a
