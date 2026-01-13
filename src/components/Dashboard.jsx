@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useDisconnect, useActiveWallet } from 'thirdweb/react';
 import { getContract, readContract, prepareContractCall, sendTransaction } from 'thirdweb';
 import { createThirdwebClient } from 'thirdweb';
@@ -6,20 +6,27 @@ import { arbitrum, base } from 'thirdweb/chains';
 
 const client = createThirdwebClient({ clientId: 'ef76c96ae163aba05ebd7e20d94b81fd' });
 
-const API_URL =
-  'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/FIRECRAWL_DATA';
+const API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/FIRECRAWL_DATA';
+
+// Supabase direct REST API
+const SUPABASE_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjcnZhcXp0dmZucGhob3FjYnBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY2MzE4NTAsImV4cCI6MjA2MjIwNzg1MH0.IrNpSrPHLbJIjSc9uoHxTfT21v0PNDZL2lxL3CasnI4';
+
+// ⚠️ COOLDOWN: 2 minutes pour TEST, changer à 72*60*60*1000 (72h) pour production
+const REDEMPTION_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+// const REDEMPTION_COOLDOWN_MS = 72 * 60 * 60 * 1000; // 72 heures (PRODUCTION)
 
 // ========== ENZYME VAULT CONFIGURATION ==========
 const ENZYME_VAULTS = {
   arb: {
     vaultProxy: '0x591e7194fee6f5615ea89000318e630eab92fbe1',
-    denominationAsset: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', // USDC on Arbitrum
+    denominationAsset: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
     chain: arbitrum,
     enzymeUrl: 'https://app.enzyme.finance/vault/0x591e7194fee6f5615ea89000318e630eab92fbe1?network=arbitrum'
   },
   base: {
-    vaultProxy: null, // Not yet configured
-    denominationAsset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+    vaultProxy: null,
+    denominationAsset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
     chain: base,
     enzymeUrl: null
   }
@@ -45,9 +52,7 @@ function Dashboard({ address }) {
   const { disconnect } = useDisconnect();
   const wallet = useActiveWallet();
   const [activePanel, setActivePanel] = useState('overview');
-  const [theme, setTheme] = useState(
-    localStorage.getItem('g12-theme') || 'dark'
-  );
+  const [theme, setTheme] = useState(localStorage.getItem('g12-theme') || 'dark');
   const [vaultData, setVaultData] = useState({ arb: null, base: null });
   const [loading, setLoading] = useState(true);
 
@@ -64,13 +69,14 @@ function Dashboard({ address }) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [notification, setNotification] = useState(null);
 
+  // Redemption cooldown state
+  const [pendingRedemptions, setPendingRedemptions] = useState({ arb: null, base: null });
+  const [countdowns, setCountdowns] = useState({ arb: null, base: null });
+
   // Format helpers
   const fmtUsd = (v) => {
     if (v == null || isNaN(Number(v))) return '$—';
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(Number(v));
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(v));
   };
 
   const fmtPercent = (v) => {
@@ -80,14 +86,105 @@ function Dashboard({ address }) {
     return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
   };
 
-  const shortAddress = address
-    ? `${address.slice(0, 6)}...${address.slice(-4)}`
-    : '';
+  const formatCountdown = (ms) => {
+    if (ms <= 0) return 'Ready!';
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${seconds}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+  };
+
+  const shortAddress = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '';
   const avatarText = address ? address.slice(2, 4).toUpperCase() : '0x';
 
   const showNotification = (message, type = 'info') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 4000);
+  };
+
+  // ========== SUPABASE API FUNCTIONS ==========
+  const supabaseRequest = async (table, method, body = null, filters = '') => {
+    const url = `${SUPABASE_URL}/rest/v1/${table}${filters}`;
+    const headers = {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+    };
+    if (method === 'POST') headers['Prefer'] = 'return=representation';
+    
+    const options = { method, headers };
+    if (body) options.body = JSON.stringify(body);
+    
+    const res = await fetch(url, options);
+    if (!res.ok) {
+      const error = await res.text();
+      throw new Error(`Supabase error: ${error}`);
+    }
+    return method === 'DELETE' ? null : res.json();
+  };
+
+  // Fetch pending redemption requests for this wallet
+  const fetchPendingRedemptions = useCallback(async () => {
+    if (!address) return;
+    
+    try {
+      const data = await supabaseRequest(
+        'redemption_requests',
+        'GET',
+        null,
+        `?wallet_address=eq.${address.toLowerCase()}&status=eq.pending&select=*`
+      );
+      
+      const pending = { arb: null, base: null };
+      for (const req of data || []) {
+        pending[req.vault] = req;
+      }
+      setPendingRedemptions(pending);
+    } catch (err) {
+      console.error('Failed to fetch pending redemptions:', err);
+    }
+  }, [address]);
+
+  // Create a new redemption request
+  const createRedemptionRequest = async (vault, sharesAmount, estimatedUsdc) => {
+    const now = new Date();
+    const unlockAt = new Date(now.getTime() + REDEMPTION_COOLDOWN_MS);
+    
+    const request = {
+      wallet_address: address.toLowerCase(),
+      vault,
+      shares_amount: sharesAmount,
+      estimated_usdc_value: estimatedUsdc,
+      requested_at: now.toISOString(),
+      unlock_at: unlockAt.toISOString(),
+      status: 'pending'
+    };
+    
+    const result = await supabaseRequest('redemption_requests', 'POST', request);
+    return result[0];
+  };
+
+  // Update redemption request status
+  const updateRedemptionStatus = async (id, status, txHash = null) => {
+    const update = { 
+      status,
+      ...(status === 'completed' && { completed_at: new Date().toISOString() }),
+      ...(txHash && { tx_hash: txHash })
+    };
+    
+    await supabaseRequest(
+      'redemption_requests',
+      'PATCH',
+      update,
+      `?id=eq.${id}`
+    );
   };
 
   // Theme toggle
@@ -121,7 +218,6 @@ function Dashboard({ address }) {
     async function fetchUserBalances() {
       if (!address) return;
 
-      // Arbitrum vault
       if (ENZYME_VAULTS.arb.vaultProxy) {
         try {
           const vaultContract = getContract({ client, chain: arbitrum, address: ENZYME_VAULTS.arb.vaultProxy, abi: VAULT_ABI });
@@ -134,8 +230,6 @@ function Dashboard({ address }) {
           setUserVaultBalances(prev => ({ ...prev, arb: shareBalance }));
           setUserUsdcBalances(prev => ({ ...prev, arb: usdcBalance }));
           setComptrollerAddresses(prev => ({ ...prev, arb: comptroller }));
-          
-          console.log('Arbitrum balances:', { shares: Number(shareBalance) / 1e18, usdc: Number(usdcBalance) / 1e6, comptroller });
         } catch (err) {
           console.error('Failed to fetch Arbitrum balances:', err);
         }
@@ -143,6 +237,31 @@ function Dashboard({ address }) {
     }
     fetchUserBalances();
   }, [address]);
+
+  // Fetch pending redemptions on mount
+  useEffect(() => {
+    fetchPendingRedemptions();
+  }, [fetchPendingRedemptions]);
+
+  // Countdown timer effect
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const newCountdowns = { arb: null, base: null };
+      
+      for (const vault of ['arb', 'base']) {
+        const pending = pendingRedemptions[vault];
+        if (pending) {
+          const unlockTime = new Date(pending.unlock_at).getTime();
+          const remaining = unlockTime - Date.now();
+          newCountdowns[vault] = remaining > 0 ? remaining : 0;
+        }
+      }
+      
+      setCountdowns(newCountdowns);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [pendingRedemptions]);
 
   // Calculate user's vault value in USD
   const getUserVaultValue = (vaultKey) => {
@@ -153,7 +272,7 @@ function Dashboard({ address }) {
 
   const totalBalance = getUserVaultValue('arb') + getUserVaultValue('base');
 
-  // Deposit function
+  // ========== DEPOSIT FUNCTION ==========
   const handleDeposit = async () => {
     const vaultKey = depositModal.vault;
     const vault = ENZYME_VAULTS[vaultKey];
@@ -171,17 +290,18 @@ function Dashboard({ address }) {
     setIsProcessing(true);
     try {
       const account = await wallet.getAccount();
-      const amount = BigInt(Math.floor(parseFloat(depositAmount) * 1e6)); // USDC 6 decimals
+      const amount = BigInt(Math.floor(parseFloat(depositAmount) * 1e6));
 
-      // Check balance
       if (userUsdcBalances[vaultKey] < amount) {
         showNotification('Insufficient USDC balance', 'error');
+        setIsProcessing(false);
         return;
       }
 
       const comptrollerAddr = comptrollerAddresses[vaultKey];
       if (!comptrollerAddr) {
         showNotification('Could not find vault comptroller', 'error');
+        setIsProcessing(false);
         return;
       }
 
@@ -199,7 +319,6 @@ function Dashboard({ address }) {
       setDepositModal({ open: false, vault: 'arb' });
       setDepositAmount('');
       
-      // Refresh balances
       window.location.reload();
     } catch (err) {
       console.error('Deposit error:', err);
@@ -209,8 +328,8 @@ function Dashboard({ address }) {
     }
   };
 
-  // Redeem function
-  const handleRedeem = async () => {
+  // ========== REDEMPTION REQUEST FUNCTION ==========
+  const handleRedemptionRequest = async () => {
     const vaultKey = redeemModal.vault;
     const vault = ENZYME_VAULTS[vaultKey];
     
@@ -224,15 +343,51 @@ function Dashboard({ address }) {
       return;
     }
 
+    const sharesAmount = parseFloat(redeemAmount);
+    const userShares = Number(userVaultBalances[vaultKey]) / 1e18;
+    
+    if (sharesAmount > userShares) {
+      showNotification('Insufficient vault shares', 'error');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      // Calculate estimated USDC value
+      const sharePrice = vaultData[vaultKey]?.share_price || 1;
+      const estimatedUsdc = sharesAmount * sharePrice;
+
+      // Create redemption request in Supabase
+      const request = await createRedemptionRequest(vaultKey, sharesAmount, estimatedUsdc);
+      
+      setPendingRedemptions(prev => ({ ...prev, [vaultKey]: request }));
+      
+      showNotification(`Redemption request submitted! You can withdraw in ${formatCountdown(REDEMPTION_COOLDOWN_MS)}`, 'success');
+      setRedeemAmount('');
+      
+    } catch (err) {
+      console.error('Redemption request error:', err);
+      showNotification(err.message || 'Failed to submit request', 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // ========== EXECUTE REDEMPTION (after cooldown) ==========
+  const executeRedemption = async () => {
+    const vaultKey = redeemModal.vault;
+    const vault = ENZYME_VAULTS[vaultKey];
+    const pending = pendingRedemptions[vaultKey];
+    
+    if (!pending || countdowns[vaultKey] > 0) {
+      showNotification('Please wait for the cooldown to expire', 'error');
+      return;
+    }
+
     setIsProcessing(true);
     try {
       const account = await wallet.getAccount();
-      const sharesAmount = BigInt(Math.floor(parseFloat(redeemAmount) * 1e18)); // 18 decimals
-
-      if (userVaultBalances[vaultKey] < sharesAmount) {
-        showNotification('Insufficient vault shares', 'error');
-        return;
-      }
+      const sharesAmount = BigInt(Math.floor(pending.shares_amount * 1e18));
 
       const comptrollerAddr = comptrollerAddresses[vaultKey];
       const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
@@ -242,11 +397,14 @@ function Dashboard({ address }) {
         method: 'redeemSharesForSpecificAssets',
         params: [address, sharesAmount, [vault.denominationAsset], [10000n]]
       });
-      await sendTransaction({ transaction: redeemTx, account });
+      const result = await sendTransaction({ transaction: redeemTx, account });
 
-      showNotification(`Successfully redeemed ${redeemAmount} shares!`, 'success');
+      // Update status in Supabase
+      await updateRedemptionStatus(pending.id, 'completed', result?.transactionHash);
+      
+      showNotification(`Successfully redeemed ${pending.shares_amount} shares!`, 'success');
       setRedeemModal({ open: false, vault: 'arb' });
-      setRedeemAmount('');
+      setPendingRedemptions(prev => ({ ...prev, [vaultKey]: null }));
       
       window.location.reload();
     } catch (err) {
@@ -254,6 +412,21 @@ function Dashboard({ address }) {
       showNotification(err.message || 'Redemption failed', 'error');
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // Cancel pending redemption
+  const cancelRedemption = async (vaultKey) => {
+    const pending = pendingRedemptions[vaultKey];
+    if (!pending) return;
+
+    try {
+      await updateRedemptionStatus(pending.id, 'cancelled');
+      setPendingRedemptions(prev => ({ ...prev, [vaultKey]: null }));
+      showNotification('Redemption request cancelled', 'info');
+    } catch (err) {
+      console.error('Cancel error:', err);
+      showNotification('Failed to cancel request', 'error');
     }
   };
 
@@ -269,6 +442,10 @@ function Dashboard({ address }) {
     { id: 'transactions', icon: '↔️', label: 'Transactions' },
     { id: 'settings', icon: '⚙️', label: 'Settings' },
   ];
+
+  // Check if a vault has a pending redemption
+  const hasPendingRedemption = (vaultKey) => !!pendingRedemptions[vaultKey];
+  const isRedemptionReady = (vaultKey) => hasPendingRedemption(vaultKey) && countdowns[vaultKey] === 0;
 
   return (
     <div className="dashboard">
@@ -336,47 +513,121 @@ function Dashboard({ address }) {
           <div className="modal" onClick={e => e.stopPropagation()}>
             <button className="modal-close" onClick={() => setRedeemModal({ open: false, vault: 'arb' })}>✕</button>
             <h2 className="modal-title">Request Redemption</h2>
-            <p className="modal-desc">Withdraw your funds from the vault.</p>
             
-            <div className="input-group">
-              <label className="input-label">Select Vault</label>
-              <select 
-                className="input-field" 
-                value={redeemModal.vault}
-                onChange={(e) => setRedeemModal({ ...redeemModal, vault: e.target.value })}
-              >
-                <option value="arb">DeFi Yield (Arbitrum) - TEST</option>
-                <option value="base" disabled>Stable Yield (Base) - Coming Soon</option>
-              </select>
-            </div>
-            
-            <div className="input-group">
-              <label className="input-label">Amount (Shares)</label>
-              <input 
-                type="number" 
-                className="input-field" 
-                placeholder="0.00" 
-                value={redeemAmount}
-                onChange={(e) => setRedeemAmount(e.target.value)}
-              />
-              <div className="input-helper">
-                <span>Your shares: {(Number(userVaultBalances[redeemModal.vault]) / 1e18).toFixed(6)}</span>
-                <span 
-                  className="max-btn"
-                  onClick={() => setRedeemAmount((Number(userVaultBalances[redeemModal.vault]) / 1e18).toFixed(6))}
-                >
-                  MAX
-                </span>
+            {/* Pending Redemption Status */}
+            {hasPendingRedemption(redeemModal.vault) ? (
+              <div className="redemption-status">
+                {isRedemptionReady(redeemModal.vault) ? (
+                  <>
+                    <div className="status-badge ready">
+                      <span className="status-icon">✅</span>
+                      <span>Ready to withdraw!</span>
+                    </div>
+                    <div className="pending-details">
+                      <p>Amount: <strong>{pendingRedemptions[redeemModal.vault]?.shares_amount.toFixed(6)} shares</strong></p>
+                      <p>Est. value: <strong>{fmtUsd(pendingRedemptions[redeemModal.vault]?.estimated_usdc_value)}</strong></p>
+                    </div>
+                    <div className="modal-actions">
+                      <button 
+                        className="btn btn-primary btn-block" 
+                        onClick={executeRedemption}
+                        disabled={isProcessing}
+                      >
+                        {isProcessing ? '⏳ Processing...' : '💰 Complete Withdrawal'}
+                      </button>
+                      <button 
+                        className="btn btn-secondary btn-block" 
+                        onClick={() => cancelRedemption(redeemModal.vault)}
+                      >
+                        Cancel Request
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="status-badge pending">
+                      <span className="status-icon">⏳</span>
+                      <span>Withdrawal pending</span>
+                    </div>
+                    <div className="countdown-display">
+                      <div className="countdown-label">Time remaining</div>
+                      <div className="countdown-value">{formatCountdown(countdowns[redeemModal.vault])}</div>
+                    </div>
+                    <div className="pending-details">
+                      <p>Amount: <strong>{pendingRedemptions[redeemModal.vault]?.shares_amount.toFixed(6)} shares</strong></p>
+                      <p>Est. value: <strong>{fmtUsd(pendingRedemptions[redeemModal.vault]?.estimated_usdc_value)}</strong></p>
+                    </div>
+                    <div className="cooldown-info">
+                      <span className="info-icon">ℹ️</span>
+                      <p>This waiting period ensures sufficient liquidity for all withdrawals. You'll be able to complete your withdrawal once the countdown expires.</p>
+                    </div>
+                    <button 
+                      className="btn btn-secondary btn-block" 
+                      onClick={() => cancelRedemption(redeemModal.vault)}
+                    >
+                      Cancel Request
+                    </button>
+                  </>
+                )}
               </div>
-            </div>
-            
-            <button 
-              className="btn btn-primary btn-block" 
-              onClick={handleRedeem}
-              disabled={isProcessing}
-            >
-              {isProcessing ? '⏳ Processing...' : '✅ Confirm Redemption'}
-            </button>
+            ) : (
+              <>
+                <p className="modal-desc">Request a withdrawal from the vault. A waiting period applies to ensure liquidity.</p>
+                
+                <div className="cooldown-warning">
+                  <span className="warning-icon">⏱️</span>
+                  <div>
+                    <strong>2-minute waiting period</strong>
+                    <p>After submitting, you'll need to wait before completing the withdrawal.</p>
+                  </div>
+                </div>
+                
+                <div className="input-group">
+                  <label className="input-label">Select Vault</label>
+                  <select 
+                    className="input-field" 
+                    value={redeemModal.vault}
+                    onChange={(e) => setRedeemModal({ ...redeemModal, vault: e.target.value })}
+                  >
+                    <option value="arb">DeFi Yield (Arbitrum) - TEST</option>
+                    <option value="base" disabled>Stable Yield (Base) - Coming Soon</option>
+                  </select>
+                </div>
+                
+                <div className="input-group">
+                  <label className="input-label">Amount (Shares)</label>
+                  <input 
+                    type="number" 
+                    className="input-field" 
+                    placeholder="0.00" 
+                    value={redeemAmount}
+                    onChange={(e) => setRedeemAmount(e.target.value)}
+                  />
+                  <div className="input-helper">
+                    <span>Your shares: {(Number(userVaultBalances[redeemModal.vault]) / 1e18).toFixed(6)}</span>
+                    <span 
+                      className="max-btn"
+                      onClick={() => setRedeemAmount((Number(userVaultBalances[redeemModal.vault]) / 1e18).toFixed(6))}
+                    >
+                      MAX
+                    </span>
+                  </div>
+                  {redeemAmount && (
+                    <div className="estimated-value">
+                      Est. value: {fmtUsd(parseFloat(redeemAmount) * (vaultData[redeemModal.vault]?.share_price || 1))}
+                    </div>
+                  )}
+                </div>
+                
+                <button 
+                  className="btn btn-primary btn-block" 
+                  onClick={handleRedemptionRequest}
+                  disabled={isProcessing}
+                >
+                  {isProcessing ? '⏳ Processing...' : '📝 Submit Redemption Request'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -396,9 +647,7 @@ function Dashboard({ address }) {
             {navItems.slice(0, 3).map((item) => (
               <div
                 key={item.id}
-                className={`nav-item ${
-                  activePanel === item.id ? 'active' : ''
-                }`}
+                className={`nav-item ${activePanel === item.id ? 'active' : ''}`}
                 onClick={() => setActivePanel(item.id)}
               >
                 <span className="nav-icon">{item.icon}</span>
@@ -422,9 +671,7 @@ function Dashboard({ address }) {
           <div className="nav-section">
             <div className="nav-section-title">Account</div>
             <div
-              className={`nav-item ${
-                activePanel === 'settings' ? 'active' : ''
-              }`}
+              className={`nav-item ${activePanel === 'settings' ? 'active' : ''}`}
               onClick={() => setActivePanel('settings')}
             >
               <span className="nav-icon">⚙️</span>
@@ -493,9 +740,7 @@ function Dashboard({ address }) {
                 <div className="stat-card">
                   <div className="stat-label">📈 Net APY</div>
                   <div className="stat-value">
-                    {vaultData.arb
-                      ? fmtPercent(vaultData.arb.monthly_return * 12)
-                      : '—%'}
+                    {vaultData.arb ? fmtPercent(vaultData.arb.monthly_return * 12) : '—%'}
                   </div>
                   <div className="stat-change">Weighted average</div>
                 </div>
@@ -507,9 +752,7 @@ function Dashboard({ address }) {
                 <div className="stat-card">
                   <div className="stat-label">🏆 Total Earnings</div>
                   <div className="stat-value">$0.00</div>
-                  <div className="stat-change positive">
-                    Since first deposit
-                  </div>
+                  <div className="stat-change positive">Since first deposit</div>
                 </div>
               </div>
 
@@ -518,8 +761,18 @@ function Dashboard({ address }) {
                   <div className="card-title">⚡ Quick Actions</div>
                 </div>
                 <div className="quick-actions">
-                  <button className="btn btn-primary" onClick={() => setDepositModal({ open: true, vault: 'arb' })}>➕ Deposit</button>
-                  <button className="btn btn-secondary" onClick={() => setRedeemModal({ open: true, vault: 'arb' })}>➖ Redeem</button>
+                  <button className="btn btn-primary" onClick={() => setDepositModal({ open: true, vault: 'arb' })}>
+                    ➕ Deposit
+                  </button>
+                  <button 
+                    className={`btn ${hasPendingRedemption('arb') ? 'btn-warning' : 'btn-secondary'}`}
+                    onClick={() => setRedeemModal({ open: true, vault: 'arb' })}
+                  >
+                    {hasPendingRedemption('arb') 
+                      ? (isRedemptionReady('arb') ? '💰 Complete Withdrawal' : `⏳ ${formatCountdown(countdowns.arb)}`)
+                      : '➖ Redeem'
+                    }
+                  </button>
                   <a
                     href="https://widget.mtpelerin.com/?type=web&lang=en&tab=buy&bdc=USDC&net=ARBITRUM&amt=500&cur=EUR"
                     target="_blank"
@@ -550,9 +803,7 @@ function Dashboard({ address }) {
                     <div className="vault-apy">
                       <div className="vault-apy-label">Net APY</div>
                       <div className="vault-apy-value">
-                        {vaultData.arb
-                          ? fmtPercent(vaultData.arb.monthly_return * 12)
-                          : '—%'}
+                        {vaultData.arb ? fmtPercent(vaultData.arb.monthly_return * 12) : '—%'}
                       </div>
                     </div>
                   </div>
@@ -565,9 +816,7 @@ function Dashboard({ address }) {
                       <div>
                         <div className="vault-stat-label">Share Price</div>
                         <div className="vault-stat-value">
-                          {vaultData.arb
-                            ? `$${Number(vaultData.arb.share_price).toFixed(4)}`
-                            : '$—'}
+                          {vaultData.arb ? `$${Number(vaultData.arb.share_price).toFixed(4)}` : '$—'}
                         </div>
                       </div>
                       <div>
@@ -581,8 +830,14 @@ function Dashboard({ address }) {
                       <button className="btn btn-primary btn-sm" onClick={() => setDepositModal({ open: true, vault: 'arb' })}>
                         ➕ Deposit
                       </button>
-                      <button className="btn btn-secondary btn-sm" onClick={() => setRedeemModal({ open: true, vault: 'arb' })}>
-                        ➖ Redeem
+                      <button 
+                        className={`btn btn-sm ${hasPendingRedemption('arb') ? 'btn-warning' : 'btn-secondary'}`}
+                        onClick={() => setRedeemModal({ open: true, vault: 'arb' })}
+                      >
+                        {hasPendingRedemption('arb') 
+                          ? (isRedemptionReady('arb') ? '💰 Withdraw' : `⏳ ${formatCountdown(countdowns.arb)}`)
+                          : '➖ Redeem'
+                        }
                       </button>
                       <a
                         href={ENZYME_VAULTS.arb.enzymeUrl}
@@ -609,9 +864,7 @@ function Dashboard({ address }) {
                     <div className="vault-apy">
                       <div className="vault-apy-label">Net APY</div>
                       <div className="vault-apy-value">
-                        {vaultData.base
-                          ? fmtPercent(vaultData.base.monthly_return * 12)
-                          : '—%'}
+                        {vaultData.base ? fmtPercent(vaultData.base.monthly_return * 12) : '—%'}
                       </div>
                     </div>
                   </div>
@@ -624,11 +877,7 @@ function Dashboard({ address }) {
                       <div>
                         <div className="vault-stat-label">Share Price</div>
                         <div className="vault-stat-value">
-                          {vaultData.base
-                            ? `$${Number(vaultData.base.share_price).toFixed(
-                                4
-                              )}`
-                            : '$—'}
+                          {vaultData.base ? `$${Number(vaultData.base.share_price).toFixed(4)}` : '$—'}
                         </div>
                       </div>
                       <div>
@@ -645,10 +894,7 @@ function Dashboard({ address }) {
                       <button className="btn btn-secondary btn-sm" disabled>
                         ➖ Redeem
                       </button>
-                      <a
-                        href="/strategies.html"
-                        className="btn btn-secondary btn-sm"
-                      >
+                      <a href="/strategies.html" className="btn btn-secondary btn-sm">
                         ℹ️ Details
                       </a>
                     </div>
@@ -669,13 +915,9 @@ function Dashboard({ address }) {
                   <div className="empty-icon">📄</div>
                   <div className="empty-title">No transactions yet</div>
                   <p className="empty-text">
-                    Your deposit and withdrawal history will appear here once
-                    you start using the vaults.
+                    Your deposit and withdrawal history will appear here once you start using the vaults.
                   </p>
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => setActivePanel('vaults')}
-                  >
+                  <button className="btn btn-primary" onClick={() => setActivePanel('vaults')}>
                     ➕ Make your first deposit
                   </button>
                 </div>
@@ -698,9 +940,7 @@ function Dashboard({ address }) {
                       <input
                         type="checkbox"
                         checked={theme === 'dark'}
-                        onChange={() =>
-                          setTheme(theme === 'dark' ? 'light' : 'dark')
-                        }
+                        onChange={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
                       />
                       <span className="toggle-slider"></span>
                     </label>
@@ -726,10 +966,7 @@ function Dashboard({ address }) {
                       <h4>Disconnect Wallet</h4>
                       <p>End your current session</p>
                     </div>
-                    <button
-                      className="btn btn-secondary btn-sm danger"
-                      onClick={handleLogout}
-                    >
+                    <button className="btn btn-secondary btn-sm danger" onClick={handleLogout}>
                       🚪 Disconnect
                     </button>
                   </div>
