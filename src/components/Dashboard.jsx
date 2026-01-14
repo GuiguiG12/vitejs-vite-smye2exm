@@ -1,14 +1,14 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useDisconnect, useActiveWallet } from 'thirdweb/react';
 import { getContract, readContract, prepareContractCall, sendTransaction } from 'thirdweb';
 import { createThirdwebClient } from 'thirdweb';
 import { arbitrum, base } from 'thirdweb/chains';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Defs, LinearGradient, Stop } from 'recharts';
 
 const client = createThirdwebClient({ clientId: 'ef76c96ae163aba05ebd7e20d94b81fd' });
 
 // API
 const VAULT_API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/FIRECRAWL_DATA';
-const REDEMPTION_API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/REDEMPTION_API';
 
 // Config
 const ENZYME_VAULTS = {
@@ -32,7 +32,10 @@ function Dashboard({ address }) {
   const [userVaultBalances, setUserVaultBalances] = useState({ arb: 0n, base: 0n });
   const [userUsdcBalances, setUserUsdcBalances] = useState({ arb: 0n, base: 0n });
   const [comptrollerAddresses, setComptrollerAddresses] = useState({ arb: null, base: null });
-  const [transactions, setTransactions] = useState([]); 
+  
+  // Real Chart Data
+  const [chartData, setChartData] = useState([]);
+  const [isChartLoading, setIsChartLoading] = useState(false);
 
   // Modals
   const [depositModal, setDepositModal] = useState({ open: false, vault: 'arb' });
@@ -45,24 +48,42 @@ function Dashboard({ address }) {
   const fmtPercent = (v) => (Number(v) ? (Number(v) >= 0 ? '+' : '') + Number(v).toFixed(2) + '%' : '—');
   const shortAddress = address ? `${address.slice(0,6)}...${address.slice(-4)}` : '';
 
-  // --- THEME EFFECT (FIX) ---
-  useEffect(() => {
-    // Applique l'attribut data-theme au tag <html>
-    document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
+  useEffect(() => { document.documentElement.setAttribute('data-theme', theme); }, [theme]);
 
-  // --- DATA LOADING ---
+  // Computed Values Helpers
+  const getUserShares = (key) => Number(userVaultBalances[key]) / 1e18;
+  const getUserVaultValue = (key) => getUserShares(key) * (vaultData[key]?.share_price || 1);
+  const totalBalance = getUserVaultValue('arb') + getUserVaultValue('base');
+  const walletUsdc = (Number(userUsdcBalances.arb) + Number(userUsdcBalances.base)) / 1e6;
+
+  // --- 1. LOAD DATA ---
   const loadData = useCallback(async () => {
-    // 1. Vault Stats (API)
+    // A. Load Vault Stats & History
     try {
-      const [arb, base] = await Promise.all([
+      setIsChartLoading(true);
+      const [arb, base, arbHistory] = await Promise.all([
         fetch(`${VAULT_API_URL}?action=get&network=arbitrum`).then(r => r.json()),
-        fetch(`${VAULT_API_URL}?action=get&network=base`).then(r => r.json())
+        fetch(`${VAULT_API_URL}?action=get&network=base`).then(r => r.json()),
+        fetch(`${VAULT_API_URL}?action=history&network=arbitrum`).then(r => r.json()) // Pour le graph principal
       ]);
       setVaultData({ arb, base });
-    } catch (e) { console.error(e); }
 
-    // 2. User Balances (Chain)
+      // Process Chart Data (Real History)
+      if (arbHistory && Array.isArray(arbHistory)) {
+        // On prend les données historiques du vault Arbitrum (principal)
+        const formatted = arbHistory.map(item => ({
+          date: new Date(item.scraped_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}),
+          fullDate: new Date(item.scraped_at).toLocaleString(),
+          // Si l'utilisateur a un solde, on montre la valeur de SON solde dans le temps
+          // Sinon, on montre l'évolution du prix de la part (base 1000 pour que ce soit lisible)
+          value: Number(item.share_price) * (totalBalance > 0 ? (totalBalance / Number(arb.share_price)) : 1000)
+        }));
+        // On trie par date croissante
+        setChartData(formatted.sort((a,b) => new Date(a.fullDate) - new Date(b.fullDate)));
+      }
+    } catch (e) { console.error("Error loading data", e); } finally { setIsChartLoading(false); }
+
+    // B. Load User Balances
     if (address) {
       for (const [key, vault] of Object.entries(ENZYME_VAULTS)) {
         if (!vault.vaultProxy) continue;
@@ -79,22 +100,12 @@ function Dashboard({ address }) {
         } catch(e) { console.error(e); }
       }
     }
-  }, [address]);
+  }, [address, totalBalance]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
-  // Helpers
-  const getUserVaultValue = (key) => {
-    const shares = Number(userVaultBalances[key]) / 1e18;
-    const price = vaultData[key]?.share_price || 1;
-    return shares * price;
-  };
-  const totalBalance = getUserVaultValue('arb') + getUserVaultValue('base');
-  const walletUsdc = (Number(userUsdcBalances.arb) + Number(userUsdcBalances.base)) / 1e6;
 
-  // --- ACTIONS ---
+  // Actions
   const handleDeposit = async () => {
     if (!amount) return;
     setIsProcessing(true);
@@ -113,7 +124,7 @@ function Dashboard({ address }) {
       await sendTransaction({ transaction: tx2, account });
       
       alert('Deposit Successful');
-      loadData(); // Refresh data
+      loadData();
       setDepositModal({open:false});
     } catch(e) { console.error(e); alert('Error: ' + e.message); }
     setIsProcessing(false);
@@ -123,8 +134,7 @@ function Dashboard({ address }) {
     if (!amount) return;
     setIsProcessing(true);
     try {
-      // Logic for redemption would go here
-      alert("Redemption request submitted (Demo)");
+      alert("Redemption request submitted (Demo - requires cooldown logic)");
       setRedeemModal({open:false});
     } catch(e) { alert(e.message); }
     setIsProcessing(false);
@@ -132,7 +142,6 @@ function Dashboard({ address }) {
 
   return (
     <div className="dashboard-layout">
-      
       {/* SIDEBAR */}
       <aside className="sidebar">
         <div className="sidebar-header">
@@ -141,7 +150,6 @@ function Dashboard({ address }) {
             <span className="logo-text">G12 LABS</span>
           </a>
         </div>
-
         <div className="nav-section">
           <div className="nav-label">Main Menu</div>
           <div className={`nav-item ${activePanel === 'overview' ? 'active' : ''}`} onClick={() => setActivePanel('overview')}>
@@ -154,14 +162,12 @@ function Dashboard({ address }) {
             <i className="ph ph-list-dashes"></i> Transactions
           </div>
         </div>
-
         <div className="nav-section">
           <div className="nav-label">Analytics</div>
           <a href="/strategies.html" className="nav-item">
             <i className="ph ph-chart-line-up"></i> Strategies
           </a>
         </div>
-
         <div className="nav-section">
           <div className="nav-label">Account</div>
           <div className={`nav-item ${activePanel === 'settings' ? 'active' : ''}`} onClick={() => setActivePanel('settings')}>
@@ -171,7 +177,6 @@ function Dashboard({ address }) {
             <i className="ph ph-chat-circle"></i> Support
           </div>
         </div>
-
         <div className="sidebar-footer">
           <div className="disconnect-btn" onClick={() => disconnect(wallet)}>
             <i className="ph ph-sign-out"></i> Disconnect
@@ -179,26 +184,17 @@ function Dashboard({ address }) {
         </div>
       </aside>
 
-      {/* MAIN CONTENT */}
+      {/* MAIN */}
       <main className="main-content">
-        
-        {/* TOPBAR */}
         <header className="topbar">
           <div className="breadcrumbs">
             Dashboard <span style={{margin:'0 6px'}}>/</span> <span>{activePanel === 'overview' ? 'Overview' : activePanel === 'buy-sell' ? 'Buy or Sell' : 'Transactions'}</span>
           </div>
-          
           <div className="topbar-right">
-            
-            {/* Bouton Refresh ajouté */}
-            <div className="refresh-btn" onClick={loadData} title="Refresh Data">
-               <i className="ph ph-arrows-clockwise"></i>
-            </div>
-
+            <div className="refresh-btn" onClick={loadData}><i className="ph ph-arrows-clockwise"></i></div>
             <div className={`theme-toggle ${theme}`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
               <div className="toggle-thumb">{theme === 'dark' ? '🌙' : '☀️'}</div>
             </div>
-            
             <div className="wallet-capsule">
               <div className="wallet-avatar"></div>
               <span className="wallet-addr mono">{shortAddress}</span>
@@ -207,25 +203,65 @@ function Dashboard({ address }) {
         </header>
 
         <div className="content-wrapper">
-          
-          {/* PANEL: OVERVIEW */}
           {activePanel === 'overview' && (
             <>
               <div className="row-top">
+                {/* PORTFOLIO CARD */}
                 <div className="glass-card portfolio-card">
                   <div className="p-header">
                     <h2>Total Portfolio</h2>
                     <div className="p-balance mono">{fmtUsd(totalBalance)}</div>
-                    <div className="p-change"><i className="ph ph-trend-up"></i> +$0.00 (0.00%)</div>
+                    <div className="p-change">
+                        <i className="ph ph-trend-up"></i> 
+                        APY {vaultData.arb ? fmtPercent(vaultData.arb.monthly_return * 12) : '--'}
+                    </div>
                   </div>
-                  <div className="chart-area"><div className="chart-line"></div></div>
+                  
+                  {/* REAL RECHARTS GRAPH */}
+                  <div style={{ width: '100%', height: '180px', marginTop: 'auto' }}>
+                    {isChartLoading ? (
+                      <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#666', fontSize:'12px'}}>
+                        Syncing blockchain data...
+                      </div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={chartData}>
+                          <defs>
+                            <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#E85A04" stopOpacity={0.3}/>
+                              <stop offset="95%" stopColor="#E85A04" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: '#0A0A0A', border: '1px solid #333', borderRadius: '8px', fontSize:'12px' }}
+                            itemStyle={{ color: '#fff' }}
+                            formatter={(value) => [fmtUsd(value), totalBalance > 0 ? 'Portfolio Value' : 'Strategy Performance (Base 1000)']}
+                            labelFormatter={(label) => label}
+                          />
+                          <Area 
+                            type="monotone" 
+                            dataKey="value" 
+                            stroke="#E85A04" 
+                            strokeWidth={2}
+                            fillOpacity={1} 
+                            fill="url(#colorVal)" 
+                            isAnimationActive={false}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    )}
+                  </div>
                 </div>
 
+                {/* ACTIONS CARD */}
                 <div className="glass-card actions-card">
                   <div className="available-row">
                     <div>
-                      <div className="av-label">Wallet Available</div>
-                      <div className="av-val mono">{fmtUsd(walletUsdc)}</div>
+                      <div className="av-label">Wallet Balance</div>
+                      <div className="av-val mono" style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                         <img src="/usd-coin-usdc-logo.png" width="24" alt="USDC"/>
+                         {fmtUsd(walletUsdc)}
+                      </div>
                     </div>
                   </div>
                   <div className="action-btns">
@@ -254,14 +290,8 @@ function Dashboard({ address }) {
                             </div>
                           </div>
                           <div className="pos-stats">
-                            <div className="pos-stat-grp">
-                              <label>APY</label>
-                              <span className="pos-apy">{vaultData[key] ? fmtPercent(vaultData[key].monthly_return * 12) : '--'}</span>
-                            </div>
-                            <div className="pos-stat-grp">
-                              <label>Balance</label>
-                              <span className="mono">{fmtUsd(getUserVaultValue(key))}</span>
-                            </div>
+                            <div className="pos-stat-grp"><label>APY</label><span className="pos-apy">{vaultData[key] ? fmtPercent(vaultData[key].monthly_return * 12) : '--'}</span></div>
+                            <div className="pos-stat-grp"><label>Balance</label><span className="mono">{fmtUsd(getUserVaultValue(key))}</span></div>
                           </div>
                         </div>
                       ))}
@@ -269,68 +299,58 @@ function Dashboard({ address }) {
                   ) : (
                     <div className="empty-box">
                       <i className="ph ph-safe"></i>
-                      <p>No active strategies. Deposit funds to start generating yield.</p>
+                      <p>No active positions. Deploy capital to start generating yield.</p>
                     </div>
                   )}
                 </div>
 
                 <div className="section-col">
                   <div className="section-title"><i className="ph ph-clock-counter-clockwise"></i> Recent Activity</div>
-                  <div className="glass-card" style={{padding:'0 16px'}}>
-                    {transactions.length > 0 ? (
-                      <div className="tx-list"></div>
-                    ) : (
-                      <div style={{padding:'32px', textAlign:'center', color:'var(--text-muted)', fontSize:'13px'}}>
-                        No recent activity found.
-                      </div>
-                    )}
+                  <div className="glass-card" style={{padding:'0 16px', minHeight:'200px'}}>
+                    {/* PLACEHOLDER POUR LES TRANSACTIONS */}
+                    {/* Tant qu'on n'a pas d'API user history, on affiche l'état vide propre */}
+                    <div style={{padding:'40px', textAlign:'center', color:'var(--text-muted)', fontSize:'13px', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%'}}>
+                       <i className="ph ph-scroll" style={{fontSize:'24px', marginBottom:'10px', opacity:0.5}}></i>
+                       No recent transactions found on-chain.
+                    </div>
                   </div>
                 </div>
               </div>
             </>
           )}
-
-          {/* PANEL: BUY OR SELL */}
+          
+          {/* BUY-SELL PANEL */}
           {activePanel === 'buy-sell' && (
-            <div className="vault-grid">
-              {Object.entries(ENZYME_VAULTS).map(([key, vault]) => (
-                <div className="vault-card" key={key}>
-                  <div className="vc-header">
-                    <div className="vc-title">
-                      <img src={vault.icon} width="32" /> {vault.name}
+             <div className="vault-grid">
+               {Object.entries(ENZYME_VAULTS).map(([key, vault]) => (
+                  <div className="vault-card" key={key}>
+                    <div className="vc-header">
+                      <div className="vc-title"><img src={vault.icon} width="32"/> {vault.name}</div>
+                      <div className="vc-badges"><span className="badge">{vault.network}</span></div>
                     </div>
-                    <div className="vc-badges">
-                      <span className="badge">{vault.network}</span>
+                    <div className="vc-stats">
+                      <div className="vc-stat"><label>Share Price</label><span className="mono">{fmtUsd(vaultData[key]?.share_price)}</span></div>
+                      <div className="vc-stat"><label>Net APY</label><span style={{color:'var(--success)'}}>{fmtPercent(vaultData[key]?.monthly_return * 12)}</span></div>
+                      <div className="vc-stat"><label>Your Balance</label><span className="mono">{fmtUsd(getUserVaultValue(key))}</span></div>
+                    </div>
+                    <div className="vc-actions">
+                      <button className="btn btn-primary" onClick={() => setDepositModal({open:true, vault:key})}>Deposit</button>
+                      <button className="btn btn-secondary" onClick={() => setRedeemModal({open:true, vault:key})}>Redeem</button>
                     </div>
                   </div>
-                  <div className="vc-stats">
-                    <div className="vc-stat"><label>Share Price</label><span className="mono">{fmtUsd(vaultData[key]?.share_price)}</span></div>
-                    <div className="vc-stat"><label>Net APY</label><span style={{color:'var(--success)'}}>{fmtPercent(vaultData[key]?.monthly_return * 12)}</span></div>
-                    <div className="vc-stat"><label>Your Balance</label><span className="mono">{fmtUsd(getUserVaultValue(key))}</span></div>
-                  </div>
-                  <div className="vc-actions">
-                    <button className="btn btn-primary" onClick={() => setDepositModal({open:true, vault:key})}>Deposit</button>
-                    <button className="btn btn-secondary" onClick={() => setRedeemModal({open:true, vault:key})}>Redeem</button>
-                  </div>
-                </div>
-              ))}
-            </div>
+               ))}
+             </div>
           )}
-
-          {/* PANEL: TRANSACTIONS */}
+          
+          {/* TRANSACTIONS PANEL */}
           {activePanel === 'transactions' && (
-            <div className="glass-card" style={{padding:0, overflow:'hidden'}}>
-              <table className="full-tx-table">
-                <thead>
-                  <tr><th>Type</th><th>Asset</th><th>Amount</th><th>Status</th><th>Date</th></tr>
-                </thead>
-                <tbody>
-                  <tr><td colSpan="5" style={{textAlign:'center', padding:'40px'}}>No transaction history available.</td></tr>
-                </tbody>
-              </table>
-            </div>
+             <div className="glass-card" style={{padding:0}}>
+               <table className="full-tx-table">
+                 <thead><tr><th>Type</th><th>Asset</th><th>Amount</th><th>Date</th></tr></thead>
+                 <tbody><tr><td colSpan="4" style={{padding:'60px',textAlign:'center', color:'var(--text-muted)'}}>No transaction history available.</td></tr></tbody>
+               </table>
+             </div>
           )}
-
         </div>
       </main>
 
@@ -346,35 +366,25 @@ function Dashboard({ address }) {
               <input type="number" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} />
               <span className="max-tag" onClick={() => setAmount((Number(userUsdcBalances[depositModal.vault])/1e6).toString())}>MAX</span>
             </div>
-            <div style={{display:'flex', gap:'10px'}}>
-              <button className="btn btn-primary" style={{flex:1}} onClick={handleDeposit} disabled={isProcessing}>
-                {isProcessing ? 'Processing...' : 'Confirm Deposit'}
-              </button>
-            </div>
+            <button className="btn btn-primary" style={{width:'100%'}} onClick={handleDeposit} disabled={isProcessing}>{isProcessing ? 'Processing...' : 'Confirm Deposit'}</button>
           </div>
         </div>
       )}
-
       {redeemModal.open && (
         <div className="modal-overlay" onClick={() => setRedeemModal({open:false})}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <div className="modal-title">Redeem / Withdraw</div>
+              <div className="modal-title">Redeem</div>
               <button className="close-btn" onClick={() => setRedeemModal({open:false})}>×</button>
             </div>
             <div className="input-box">
               <input type="number" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} />
               <span className="max-tag">MAX</span>
             </div>
-            <div style={{display:'flex', gap:'10px'}}>
-              <button className="btn btn-secondary" style={{flex:1}} onClick={handleRedeem} disabled={isProcessing}>
-                Submit Request
-              </button>
-            </div>
+            <button className="btn btn-secondary" style={{width:'100%'}} onClick={handleRedeem} disabled={isProcessing}>Request Redemption</button>
           </div>
         </div>
       )}
-
     </div>
   );
 }
