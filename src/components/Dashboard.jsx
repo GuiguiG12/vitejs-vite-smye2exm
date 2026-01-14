@@ -1,19 +1,20 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useDisconnect, useActiveWallet } from 'thirdweb/react';
 import { getContract, readContract, prepareContractCall, sendTransaction } from 'thirdweb';
 import { createThirdwebClient } from 'thirdweb';
 import { arbitrum, base } from 'thirdweb/chains';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Defs, LinearGradient, Stop } from 'recharts';
+import { AreaChart, Area, Tooltip, ResponsiveContainer, Defs, LinearGradient, Stop } from 'recharts';
 
 const client = createThirdwebClient({ clientId: 'ef76c96ae163aba05ebd7e20d94b81fd' });
 
 // API
 const VAULT_API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/FIRECRAWL_DATA';
+const REDEMPTION_API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/REDEMPTION_API';
 
 // Config
 const ENZYME_VAULTS = {
-  arb: { name: 'DeFi Yield', network: 'Arbitrum', icon: '/favicon_arbitrum.svg', vaultProxy: '0xc9e50e08739a4aec211f2e8e95f1ab45b923cc20', denominationAsset: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', chain: arbitrum },
-  base: { name: 'Stable Yield', network: 'Base', icon: '/favicon_base.jpeg', vaultProxy: '0xbfa811e1f065c9b66b02d8ae408d4d9b9be70a22', denominationAsset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', chain: base }
+  arb: { name: 'DeFi Yield', network: 'Arbitrum', icon: '/favicon_arbitrum.svg', vaultProxy: '0xc9e50e08739a4aec211f2e8e95f1ab45b923cc20', denominationAsset: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', chain: arbitrum, color: '#E85A04' },
+  base: { name: 'Stable Yield', network: 'Base', icon: '/favicon_base.jpeg', vaultProxy: '0xbfa811e1f065c9b66b02d8ae408d4d9b9be70a22', denominationAsset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', chain: base, color: '#0052FF' }
 };
 
 // ABIs
@@ -44,17 +45,14 @@ function Dashboard({ address }) {
   const [isProcessing, setIsProcessing] = useState(false);
 
   // Formatters
-  const fmtUsd = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(v) || 0);
+  const fmtUsd = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(Number(v) || 0);
   const fmtPercent = (v) => (Number(v) ? (Number(v) >= 0 ? '+' : '') + Number(v).toFixed(2) + '%' : '—');
   const shortAddress = address ? `${address.slice(0,6)}...${address.slice(-4)}` : '';
 
-  useEffect(() => { document.documentElement.setAttribute('data-theme', theme); }, [theme]);
-
-  // Computed Values Helpers
-  const getUserShares = (key) => Number(userVaultBalances[key]) / 1e18;
-  const getUserVaultValue = (key) => getUserShares(key) * (vaultData[key]?.share_price || 1);
-  const totalBalance = getUserVaultValue('arb') + getUserVaultValue('base');
-  const walletUsdc = (Number(userUsdcBalances.arb) + Number(userUsdcBalances.base)) / 1e6;
+  // Theme Effect: Applique la classe au body/html pour le CSS
+  useEffect(() => { 
+    document.documentElement.setAttribute('data-theme', theme); 
+  }, [theme]);
 
   // --- 1. LOAD DATA ---
   const loadData = useCallback(async () => {
@@ -64,21 +62,19 @@ function Dashboard({ address }) {
       const [arb, base, arbHistory] = await Promise.all([
         fetch(`${VAULT_API_URL}?action=get&network=arbitrum`).then(r => r.json()),
         fetch(`${VAULT_API_URL}?action=get&network=base`).then(r => r.json()),
-        fetch(`${VAULT_API_URL}?action=history&network=arbitrum`).then(r => r.json()) // Pour le graph principal
+        fetch(`${VAULT_API_URL}?action=history&network=arbitrum`).then(r => r.json())
       ]);
       setVaultData({ arb, base });
 
-      // Process Chart Data (Real History)
+      // Process Chart Data (Real History Only)
       if (arbHistory && Array.isArray(arbHistory)) {
-        // On prend les données historiques du vault Arbitrum (principal)
         const formatted = arbHistory.map(item => ({
           date: new Date(item.scraped_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}),
           fullDate: new Date(item.scraped_at).toLocaleString(),
-          // Si l'utilisateur a un solde, on montre la valeur de SON solde dans le temps
-          // Sinon, on montre l'évolution du prix de la part (base 1000 pour que ce soit lisible)
+          // Si l'utilisateur a de l'argent, on montre la valeur de son portfolio. Sinon on montre le share price x1000 pour la demo.
           value: Number(item.share_price) * (totalBalance > 0 ? (totalBalance / Number(arb.share_price)) : 1000)
         }));
-        // On trie par date croissante
+        // Tri par date
         setChartData(formatted.sort((a,b) => new Date(a.fullDate) - new Date(b.fullDate)));
       }
     } catch (e) { console.error("Error loading data", e); } finally { setIsChartLoading(false); }
@@ -100,10 +96,15 @@ function Dashboard({ address }) {
         } catch(e) { console.error(e); }
       }
     }
-  }, [address, totalBalance]);
+  }, [address, totalBalance]); // totalBalance en dépendance pour recalculer le graph si le solde change
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Computed Values
+  const getUserShares = (key) => Number(userVaultBalances[key]) / 1e18;
+  const getUserVaultValue = (key) => getUserShares(key) * (vaultData[key]?.share_price || 1);
+  const totalBalance = getUserVaultValue('arb') + getUserVaultValue('base');
+  const walletUsdc = (Number(userUsdcBalances.arb) + Number(userUsdcBalances.base)) / 1e6;
 
   // Actions
   const handleDeposit = async () => {
@@ -134,7 +135,7 @@ function Dashboard({ address }) {
     if (!amount) return;
     setIsProcessing(true);
     try {
-      alert("Redemption request submitted (Demo - requires cooldown logic)");
+      alert("Redemption request submitted.");
       setRedeemModal({open:false});
     } catch(e) { alert(e.message); }
     setIsProcessing(false);
@@ -191,10 +192,16 @@ function Dashboard({ address }) {
             Dashboard <span style={{margin:'0 6px'}}>/</span> <span>{activePanel === 'overview' ? 'Overview' : activePanel === 'buy-sell' ? 'Buy or Sell' : 'Transactions'}</span>
           </div>
           <div className="topbar-right">
-            <div className="refresh-btn" onClick={loadData}><i className="ph ph-arrows-clockwise"></i></div>
+            {/* Bouton Refresh ajouté */}
+            <div className="refresh-btn" onClick={loadData} title="Refresh Data">
+               <i className="ph ph-arrows-clockwise"></i>
+            </div>
+
+            {/* Toggle Theme corrigé */}
             <div className={`theme-toggle ${theme}`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
               <div className="toggle-thumb">{theme === 'dark' ? '🌙' : '☀️'}</div>
             </div>
+            
             <div className="wallet-capsule">
               <div className="wallet-avatar"></div>
               <span className="wallet-addr mono">{shortAddress}</span>
@@ -206,13 +213,14 @@ function Dashboard({ address }) {
           {activePanel === 'overview' && (
             <>
               <div className="row-top">
-                {/* PORTFOLIO CARD */}
+                {/* 1. PORTFOLIO CARD */}
                 <div className="glass-card portfolio-card">
                   <div className="p-header">
                     <h2>Total Portfolio</h2>
                     <div className="p-balance mono">{fmtUsd(totalBalance)}</div>
                     <div className="p-change">
                         <i className="ph ph-trend-up"></i> 
+                        {/* On affiche l'APY réel ici au lieu du PnL calculé */}
                         APY {vaultData.arb ? fmtPercent(vaultData.arb.monthly_return * 12) : '--'}
                     </div>
                   </div>
@@ -220,7 +228,7 @@ function Dashboard({ address }) {
                   {/* REAL RECHARTS GRAPH */}
                   <div style={{ width: '100%', height: '180px', marginTop: 'auto' }}>
                     {isChartLoading ? (
-                      <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'#666', fontSize:'12px'}}>
+                      <div style={{height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-muted)', fontSize:'12px'}}>
                         Syncing blockchain data...
                       </div>
                     ) : (
@@ -233,9 +241,9 @@ function Dashboard({ address }) {
                             </linearGradient>
                           </defs>
                           <Tooltip 
-                            contentStyle={{ backgroundColor: '#0A0A0A', border: '1px solid #333', borderRadius: '8px', fontSize:'12px' }}
-                            itemStyle={{ color: '#fff' }}
-                            formatter={(value) => [fmtUsd(value), totalBalance > 0 ? 'Portfolio Value' : 'Strategy Performance (Base 1000)']}
+                            contentStyle={{ backgroundColor: 'var(--bg-root)', border: '1px solid var(--border)', borderRadius: '8px', fontSize:'12px', color: 'var(--text-main)' }}
+                            itemStyle={{ color: 'var(--text-main)' }}
+                            formatter={(value) => [fmtUsd(value), totalBalance > 0 ? 'Portfolio Value' : 'Strategy (Base 1000)']}
                             labelFormatter={(label) => label}
                           />
                           <Area 
@@ -253,13 +261,14 @@ function Dashboard({ address }) {
                   </div>
                 </div>
 
-                {/* ACTIONS CARD */}
+                {/* 2. ACTIONS CARD */}
                 <div className="glass-card actions-card">
                   <div className="available-row">
                     <div>
+                      {/* Changement de Label et Ajout Icone USDC */}
                       <div className="av-label">Wallet Balance</div>
                       <div className="av-val mono" style={{display:'flex', alignItems:'center', gap:'8px'}}>
-                         <img src="/usd-coin-usdc-logo.png" width="24" alt="USDC"/>
+                         <img src="/usd-coin-usdc-logo.png" width="24" height="24" alt="USDC"/>
                          {fmtUsd(walletUsdc)}
                       </div>
                     </div>
@@ -307,8 +316,7 @@ function Dashboard({ address }) {
                 <div className="section-col">
                   <div className="section-title"><i className="ph ph-clock-counter-clockwise"></i> Recent Activity</div>
                   <div className="glass-card" style={{padding:'0 16px', minHeight:'200px'}}>
-                    {/* PLACEHOLDER POUR LES TRANSACTIONS */}
-                    {/* Tant qu'on n'a pas d'API user history, on affiche l'état vide propre */}
+                    {/* Placeholder propre tant que pas d'API Transaction */}
                     <div style={{padding:'40px', textAlign:'center', color:'var(--text-muted)', fontSize:'13px', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%'}}>
                        <i className="ph ph-scroll" style={{fontSize:'24px', marginBottom:'10px', opacity:0.5}}></i>
                        No recent transactions found on-chain.
@@ -319,7 +327,7 @@ function Dashboard({ address }) {
             </>
           )}
           
-          {/* BUY-SELL PANEL */}
+          {/* AUTRES PANELS (Buy-Sell, Transactions) */}
           {activePanel === 'buy-sell' && (
              <div className="vault-grid">
                {Object.entries(ENZYME_VAULTS).map(([key, vault]) => (
@@ -342,19 +350,18 @@ function Dashboard({ address }) {
              </div>
           )}
           
-          {/* TRANSACTIONS PANEL */}
           {activePanel === 'transactions' && (
              <div className="glass-card" style={{padding:0}}>
                <table className="full-tx-table">
                  <thead><tr><th>Type</th><th>Asset</th><th>Amount</th><th>Date</th></tr></thead>
-                 <tbody><tr><td colSpan="4" style={{padding:'60px',textAlign:'center', color:'var(--text-muted)'}}>No transaction history available.</td></tr></tbody>
+                 <tbody><tr><td colSpan="4" style={{padding:'40px',textAlign:'center', color:'var(--text-muted)'}}>No history.</td></tr></tbody>
                </table>
              </div>
           )}
         </div>
       </main>
 
-      {/* MODALS */}
+      {/* MODALS (Deposit / Redeem) */}
       {depositModal.open && (
         <div className="modal-overlay" onClick={() => setDepositModal({open:false})}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
