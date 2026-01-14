@@ -1,43 +1,60 @@
 /* =========================================================
-   G12 LABS - NEUTRAL GLASS THEME
+   G12 LABS - NEUTRAL GLASS THEME (DARK & LIGHT)
    ========================================================= */
    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
    :root {
-     /* BRAND (Magma - Utilisé avec parcimonie) */
+     /* --- BRAND --- */
      --magma-core: #E85A04;
      --magma-hover: #FF7B29;
-     --magma-dim: rgba(232, 90, 4, 0.08); /* Très subtil */
+     --magma-dim: rgba(232, 90, 4, 0.08);
      
-     /* STATUS */
+     /* --- STATUS --- */
      --success: #10B981;
      --success-bg: rgba(16, 185, 129, 0.1);
      --error: #EF4444;
      --warning: #F59E0B;
    
-     /* NEUTRAL SCALE (Gris Purs - Pas de bleu) */
-     --bg-root: #050505;        /* Fond noir profond */
-     --bg-sidebar: #080808;     /* Sidebar presque noire */
+     /* --- DARK THEME (DEFAULT) --- */
+     --bg-root: #050505;
+     --bg-sidebar: #080808;
      
-     /* GLASS CARDS */
-     --bg-card: rgba(20, 20, 20, 0.6); /* Semi-transparent */
+     /* Glass Cards (Dark) */
+     --bg-card: rgba(20, 20, 20, 0.6);
      --bg-card-hover: rgba(30, 30, 30, 0.7);
      --glass-blur: blur(12px);
      
-     /* BORDERS & SEPARATORS */
-     --border: rgba(255, 255, 255, 0.06);
-     --border-hover: rgba(255, 255, 255, 0.12);
-     
-     /* TEXT */
+     /* Borders & Text (Dark) */
+     --border: rgba(255, 255, 255, 0.08);
+     --border-hover: rgba(255, 255, 255, 0.15);
      --text-main: #FFFFFF;
-     --text-muted: #888888;     /* Gris neutre */
-     --text-dim: #444444;       /* Gris foncé pour les détails */
+     --text-muted: #888888;
+     --text-dim: #444444;
    
-     /* UTILS */
+     /* --- UTILS --- */
      --radius-md: 8px;
      --radius-lg: 16px;
      --radius-xl: 24px;
      --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
+   }
+   
+   /* --- LIGHT THEME OVERRIDES --- */
+   [data-theme='light'] {
+     --bg-root: #F3F4F6;       /* Gris très clair */
+     --bg-sidebar: #FFFFFF;    /* Blanc pur */
+     
+     /* Glass Cards (Light) */
+     --bg-card: rgba(255, 255, 255, 0.7);
+     --bg-card-hover: rgba(255, 255, 255, 0.9);
+     
+     /* Borders & Text (Light) */
+     --border: rgba(0, 0, 0, 0.08);
+     --border-hover: rgba(0, 0, 0, 0.15);
+     --text-main: #111827;     /* Noir quasi pur */
+     --text-muted: #6B7280;    /* Gris moyen */
+     --text-dim: #D1D5DB;      /* Gris clair */
+     
+     --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.05);
    }
    
    /* RESET */
@@ -48,9 +65,10 @@
      color: var(--text-main);
      font-family: 'Inter', sans-serif;
      overflow-x: hidden;
+     transition: background-color 0.3s ease, color 0.3s ease; /* Transition douce */
    }
    
-   /* Grain Texture (Très subtile) */
+   /* Grain Texture */
    body::before {
      content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 9999;
      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
@@ -72,14 +90,15 @@
      display: flex; flex-direction: column;
      position: fixed; top: 0; bottom: 0; left: 0; z-index: 50;
      padding: 24px 16px;
+     transition: background-color 0.3s ease, border-color 0.3s ease;
    }
    
    .sidebar-header { margin-bottom: 40px; padding-left: 12px; }
-   .logo-container { display: flex; align-items: center; gap: 12px; text-decoration: none; color: white; }
+   .logo-container { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text-main); }
    .logo-text { font-weight: 700; font-size: 16px; letter-spacing: 0.5px; }
    
    .nav-section { margin-bottom: 32px; }
-   .nav-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; padding-left: 12px; margin-bottom: 8px; font-weight: 600; }
+   .nav-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; padding-left: 12px; margin-bottom: 8px; font-weight: 600; opacity: 0.7; }
    
    .nav-item {
      display: flex; align-items: center; gap: 12px;
@@ -88,19 +107,19 @@
      color: var(--text-muted); cursor: pointer;
      transition: all 0.2s; font-size: 14px; font-weight: 500;
    }
-   .nav-item:hover { color: white; background: rgba(255,255,255,0.03); }
+   .nav-item:hover { color: var(--text-main); background: var(--bg-card); }
    .nav-item.active { 
-     background: rgba(255,255,255,0.05); 
-     color: white; 
-     border-left: 3px solid var(--magma-core); /* La barre orange demandée */
-     border-radius: 4px 8px 8px 4px; /* Ajustement radius */
+     background: var(--bg-card-hover); 
+     color: var(--text-main); 
+     border-left: 3px solid var(--magma-core);
+     border-radius: 4px 8px 8px 4px;
    }
    .nav-item i { font-size: 18px; }
    
    .sidebar-footer { margin-top: auto; }
    .disconnect-btn {
      display: flex; align-items: center; gap: 12px; padding: 10px 12px;
-     color: var(--text-dim); cursor: pointer; transition: 0.2s;
+     color: var(--text-muted); cursor: pointer; transition: 0.2s;
      font-size: 14px; border-radius: var(--radius-md);
    }
    .disconnect-btn:hover { color: var(--error); background: rgba(239, 68, 68, 0.05); }
@@ -117,42 +136,54 @@
      display: flex; align-items: center; justify-content: space-between;
      border-bottom: 1px solid var(--border);
      position: sticky; top: 0; z-index: 40;
-     background: rgba(5, 5, 5, 0.8); backdrop-filter: blur(10px);
+     /* Glass effect sur le topbar aussi */
+     background: var(--bg-card); 
+     backdrop-filter: blur(10px);
+     transition: background-color 0.3s ease, border-color 0.3s ease;
    }
    
    .breadcrumbs { font-size: 14px; color: var(--text-muted); }
-   .breadcrumbs span { color: white; font-weight: 500; }
+   .breadcrumbs span { color: var(--text-main); font-weight: 500; }
    
    .topbar-right { display: flex; align-items: center; gap: 16px; }
    
-   /* Network Pill */
-   .net-pill {
-     display: flex; align-items: center; gap: 6px;
-     font-size: 12px; color: var(--text-muted);
-     padding: 6px 12px; background: rgba(255,255,255,0.03);
-     border-radius: 20px; border: 1px solid var(--border);
+   /* Bouton Refresh */
+   .refresh-btn {
+     width: 32px; height: 32px; border-radius: 8px;
+     display: flex; align-items: center; justify-content: center;
+     color: var(--text-muted); cursor: pointer;
+     border: 1px solid transparent; transition: 0.2s;
    }
-   .net-dot { width: 6px; height: 6px; background: var(--success); border-radius: 50%; box-shadow: 0 0 5px var(--success); }
+   .refresh-btn:hover { background: var(--bg-card-hover); color: var(--text-main); border-color: var(--border); }
    
-   /* Theme Toggle */
+   /* Theme Toggle (Fonctionnel) */
    .theme-toggle {
-     width: 48px; height: 26px; border-radius: 20px;
-     background: #1a1a1a; border: 1px solid var(--border);
+     width: 52px; height: 28px; border-radius: 20px;
+     background: var(--bg-root); border: 1px solid var(--border);
      position: relative; cursor: pointer;
+     box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+     transition: all 0.3s ease;
    }
    .toggle-thumb {
-     width: 20px; height: 20px; background: white;
-     border-radius: 50%; position: absolute; top: 2px; left: 2px;
-     transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+     width: 20px; height: 20px; 
+     background: var(--text-main); /* Change selon le thème */
+     border-radius: 50%; position: absolute; top: 3px; left: 4px;
+     transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.3s;
      display: flex; align-items: center; justify-content: center; font-size: 12px;
+     box-shadow: 0 2px 4px rgba(0,0,0,0.2);
    }
-   .theme-toggle.light .toggle-thumb { transform: translateX(22px); background: var(--magma-core); }
+   /* Quand la classe 'light' est présente sur le parent */
+   .theme-toggle.light .toggle-thumb { 
+     transform: translateX(22px); 
+     background: var(--magma-core); 
+     color: white; 
+   }
    
    /* Wallet Capsule */
    .wallet-capsule {
      display: flex; align-items: center; gap: 10px;
      padding: 6px 12px 6px 6px;
-     background: #0A0A0A; border: 1px solid var(--border);
+     background: var(--bg-root); border: 1px solid var(--border);
      border-radius: 50px; cursor: pointer; transition: 0.2s;
    }
    .wallet-capsule:hover { border-color: var(--text-muted); }
@@ -160,21 +191,18 @@
      width: 28px; height: 28px; border-radius: 50%;
      background: linear-gradient(135deg, #E85A04, #8B5CF6);
    }
-   .wallet-addr { font-size: 13px; color: white; }
+   .wallet-addr { font-size: 13px; color: var(--text-main); }
    
-   /* CONTENT */
+   /* CONTENT WRAPPER */
    .content-wrapper { padding: 40px; max-width: 1600px; margin: 0 auto; width: 100%; }
    
    /* =========================================================
-      DASHBOARD GRIDS (OPTION B)
+      DASHBOARD CARDS
       ========================================================= */
    
-   /* ROW 1: PORTFOLIO & ACTIONS */
-   .row-top {
-     display: grid; grid-template-columns: 1.8fr 1fr; gap: 24px; margin-bottom: 24px;
-   }
+   .row-top { display: grid; grid-template-columns: 1.8fr 1fr; gap: 24px; margin-bottom: 24px; }
    
-   /* Glass Card Base */
+   /* Glass Card Generic */
    .glass-card {
      background: var(--bg-card);
      backdrop-filter: var(--glass-blur);
@@ -184,6 +212,7 @@
      padding: 32px;
      box-shadow: var(--shadow-card);
      position: relative; overflow: hidden;
+     transition: background-color 0.3s ease, border-color 0.3s ease;
    }
    
    /* Portfolio Card */
@@ -191,21 +220,21 @@
      display: flex; flex-direction: column; justify-content: space-between;
      min-height: 300px;
    }
-   .portfolio-card::before { /* Glow effect */
+   .portfolio-card::before {
      content: ''; position: absolute; top: -100px; left: -100px;
      width: 300px; height: 300px; background: var(--magma-core);
      filter: blur(150px); opacity: 0.1; pointer-events: none;
    }
    
    .p-header h2 { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
-   .p-balance { font-size: 48px; font-weight: 700; color: white; letter-spacing: -1px; margin-bottom: 8px; }
+   .p-balance { font-size: 48px; font-weight: 700; color: var(--text-main); letter-spacing: -1px; margin-bottom: 8px; }
    .p-change { 
      display: inline-flex; align-items: center; gap: 6px;
      font-size: 14px; color: var(--success); font-weight: 600;
      background: var(--success-bg); padding: 4px 10px; border-radius: 20px; 
    }
    
-   /* Fake Chart CSS */
+   /* Fake Chart */
    .chart-area {
      margin-top: 40px; height: 100px; width: 100%;
      background: linear-gradient(180deg, rgba(232, 90, 4, 0.15) 0%, transparent 100%);
@@ -226,43 +255,41 @@
    .actions-card { display: flex; flex-direction: column; gap: 24px; }
    .available-row { display: flex; justify-content: space-between; align-items: flex-end; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
    .av-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
-   .av-val { font-size: 24px; color: white; font-weight: 600; }
+   .av-val { font-size: 24px; color: var(--text-main); font-weight: 600; }
    
    .action-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex: 1; }
    .act-btn {
-     background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+     background: rgba(125, 125, 125, 0.05); /* Plus neutre */
+     border: 1px solid var(--border);
      border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center;
      gap: 12px; cursor: pointer; transition: 0.2s; color: var(--text-muted); font-size: 14px; font-weight: 500;
    }
-   .act-btn:hover { background: rgba(255,255,255,0.06); border-color: var(--text-main); color: white; transform: translateY(-2px); }
-   .act-btn i { font-size: 24px; color: white; }
+   .act-btn:hover { background: var(--bg-card-hover); border-color: var(--text-muted); color: var(--text-main); transform: translateY(-2px); }
+   .act-btn i { font-size: 24px; color: var(--text-main); }
    .act-btn.primary i { color: var(--magma-core); }
    
-   /* ROW 2: POSITIONS & TRANSACTIONS */
-   .row-bottom {
-     display: grid; grid-template-columns: 1.5fr 1fr; gap: 24px;
-   }
-   
-   .section-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+   /* ROW 2 */
+   .row-bottom { display: grid; grid-template-columns: 1.5fr 1fr; gap: 24px; }
+   .section-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; color: var(--text-main); }
    
    /* Positions List */
    .positions-list { display: flex; flex-direction: column; gap: 12px; }
    .pos-item {
      display: flex; align-items: center; justify-content: space-between;
-     padding: 16px 20px; background: rgba(255,255,255,0.02);
+     padding: 16px 20px; background: var(--bg-card);
      border: 1px solid var(--border); border-radius: 12px;
      transition: 0.2s; cursor: pointer;
    }
-   .pos-item:hover { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.1); }
+   .pos-item:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
    
    .pos-main { display: flex; align-items: center; gap: 16px; }
    .pos-icon { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; }
-   .pos-info h4 { font-size: 15px; font-weight: 600; color: white; margin-bottom: 2px; }
+   .pos-info h4 { font-size: 15px; font-weight: 600; color: var(--text-main); margin-bottom: 2px; }
    .pos-info span { font-size: 12px; color: var(--text-muted); text-transform: uppercase; }
    
    .pos-stats { display: flex; gap: 32px; text-align: right; }
-   .pos-stat-grp label { display: block; font-size: 11px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 2px; }
-   .pos-stat-grp span { font-size: 14px; color: white; font-weight: 500; }
+   .pos-stat-grp label { display: block; font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 2px; }
+   .pos-stat-grp span { font-size: 14px; color: var(--text-main); font-weight: 500; }
    .pos-apy { color: var(--success) !important; font-weight: 700 !important; }
    
    /* Empty State */
@@ -272,7 +299,7 @@
    }
    .empty-box i { font-size: 32px; margin-bottom: 12px; color: var(--text-dim); }
    
-   /* Transactions List (Compact) */
+   /* Transactions (Compact) */
    .tx-list { display: flex; flex-direction: column; }
    .tx-item {
      display: flex; align-items: center; justify-content: space-between;
@@ -283,16 +310,15 @@
    .tx-left { display: flex; align-items: center; gap: 12px; }
    .tx-icon { 
      width: 32px; height: 32px; border-radius: 50%; 
-     background: rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: center;
+     background: rgba(125,125,125,0.1); display: flex; align-items: center; justify-content: center;
      color: var(--text-muted); font-size: 14px;
    }
    .tx-icon.in { color: var(--success); background: var(--success-bg); }
-   .tx-icon.out { color: var(--magma-core); background: var(--magma-dim); }
+   .tx-icon.out { color: var(--magma-core); background: rgba(232, 90, 4, 0.1); }
    
-   .tx-info div { font-size: 14px; color: white; font-weight: 500; }
-   .tx-info span { font-size: 12px; color: var(--text-dim); }
-   
-   .tx-amount { font-family: 'JetBrains Mono'; font-size: 14px; color: white; }
+   .tx-info div { font-size: 14px; color: var(--text-main); font-weight: 500; }
+   .tx-info span { font-size: 12px; color: var(--text-muted); }
+   .tx-amount { font-family: 'JetBrains Mono'; font-size: 14px; color: var(--text-main); }
    
    /* =========================================================
       VAULT GRID (BUY OR SELL PAGE)
@@ -305,13 +331,13 @@
      display: flex; flex-direction: column; gap: 24px;
    }
    .vc-header { display: flex; justify-content: space-between; align-items: center; }
-   .vc-title { display: flex; align-items: center; gap: 12px; font-size: 18px; font-weight: 600; }
+   .vc-title { display: flex; align-items: center; gap: 12px; font-size: 18px; font-weight: 600; color: var(--text-main); }
    .vc-badges { display: flex; gap: 8px; }
-   .badge { font-size: 10px; padding: 4px 8px; border-radius: 4px; background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); }
+   .badge { font-size: 10px; padding: 4px 8px; border-radius: 4px; background: rgba(125,125,125,0.1); color: var(--text-muted); border: 1px solid var(--border); }
    
-   .vc-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; background: rgba(0,0,0,0.2); border-radius: 12px; }
-   .vc-stat label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
-   .vc-stat span { font-size: 16px; font-weight: 600; color: white; }
+   .vc-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; background: rgba(0,0,0,0.05); border-radius: 12px; }
+   .vc-stat label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+   .vc-stat span { font-size: 16px; font-weight: 600; color: var(--text-main); }
    
    .vc-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
    .btn {
@@ -320,16 +346,16 @@
    }
    .btn-primary { background: var(--magma-core); color: white; }
    .btn-primary:hover { background: var(--magma-hover); }
-   .btn-secondary { background: rgba(255,255,255,0.05); color: white; border: 1px solid var(--border); }
-   .btn-secondary:hover { background: rgba(255,255,255,0.1); border-color: var(--text-muted); }
+   .btn-secondary { background: transparent; color: var(--text-main); border: 1px solid var(--border); }
+   .btn-secondary:hover { background: rgba(125,125,125,0.1); border-color: var(--text-muted); }
    
    /* =========================================================
       TRANSACTIONS PAGE (FULL)
       ========================================================= */
    .full-tx-table { width: 100%; border-collapse: collapse; }
-   .full-tx-table th { text-align: left; padding: 16px; color: var(--text-dim); font-size: 12px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
-   .full-tx-table td { padding: 16px; color: var(--text-muted); font-size: 14px; border-bottom: 1px solid var(--border); }
-   .full-tx-table tr:hover td { background: rgba(255,255,255,0.02); color: white; }
+   .full-tx-table th { text-align: left; padding: 16px; color: var(--text-muted); font-size: 12px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+   .full-tx-table td { padding: 16px; color: var(--text-main); font-size: 14px; border-bottom: 1px solid var(--border); }
+   .full-tx-table tr:hover td { background: var(--bg-card-hover); }
    
    /* =========================================================
       MODALS
@@ -339,19 +365,20 @@
      z-index: 1000; display: flex; align-items: center; justify-content: center;
    }
    .modal-content {
-     background: #111; border: 1px solid var(--border); border-radius: 16px;
-     width: 440px; padding: 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+     background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: 16px;
+     width: 440px; padding: 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+     color: var(--text-main);
    }
    .modal-header { display: flex; justify-content: space-between; margin-bottom: 24px; }
    .modal-title { font-size: 18px; font-weight: 600; }
-   .close-btn { background: none; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer; }
+   .close-btn { background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; }
    
    .input-box {
-     background: #050505; border: 1px solid var(--border); border-radius: 8px;
+     background: var(--bg-root); border: 1px solid var(--border); border-radius: 8px;
      padding: 12px 16px; display: flex; justify-content: space-between; align-items: center;
      margin-bottom: 24px;
    }
-   .input-box input { background: transparent; border: none; color: white; font-size: 20px; outline: none; width: 100%; }
+   .input-box input { background: transparent; border: none; color: var(--text-main); font-size: 20px; outline: none; width: 100%; }
    .max-tag { color: var(--magma-core); font-size: 12px; font-weight: 700; cursor: pointer; }
    
    /* Responsive */

@@ -32,7 +32,7 @@ function Dashboard({ address }) {
   const [userVaultBalances, setUserVaultBalances] = useState({ arb: 0n, base: 0n });
   const [userUsdcBalances, setUserUsdcBalances] = useState({ arb: 0n, base: 0n });
   const [comptrollerAddresses, setComptrollerAddresses] = useState({ arb: null, base: null });
-  const [transactions, setTransactions] = useState([]); // Pour l'historique
+  const [transactions, setTransactions] = useState([]); 
 
   // Modals
   const [depositModal, setDepositModal] = useState({ open: false, vault: 'arb' });
@@ -45,36 +45,45 @@ function Dashboard({ address }) {
   const fmtPercent = (v) => (Number(v) ? (Number(v) >= 0 ? '+' : '') + Number(v).toFixed(2) + '%' : '—');
   const shortAddress = address ? `${address.slice(0,6)}...${address.slice(-4)}` : '';
 
-  // --- DATA LOADING ---
+  // --- THEME EFFECT (FIX) ---
   useEffect(() => {
-    async function loadData() {
-      // 1. Vault Stats (API)
+    // Applique l'attribut data-theme au tag <html>
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  // --- DATA LOADING ---
+  const loadData = useCallback(async () => {
+    // 1. Vault Stats (API)
+    try {
       const [arb, base] = await Promise.all([
         fetch(`${VAULT_API_URL}?action=get&network=arbitrum`).then(r => r.json()),
         fetch(`${VAULT_API_URL}?action=get&network=base`).then(r => r.json())
       ]);
       setVaultData({ arb, base });
+    } catch (e) { console.error(e); }
 
-      // 2. User Balances (Chain)
-      if (address) {
-        for (const [key, vault] of Object.entries(ENZYME_VAULTS)) {
-          if (!vault.vaultProxy) continue;
-          try {
-            const vc = getContract({ client, chain: vault.chain, address: vault.vaultProxy, abi: VAULT_ABI });
-            const shares = await readContract({ contract: vc, method: 'balanceOf', params: [address] });
-            const comp = await readContract({ contract: vc, method: 'getAccessor', params: [] });
-            const usdcC = getContract({ client, chain: vault.chain, address: vault.denominationAsset, abi: ERC20_ABI });
-            const usdc = await readContract({ contract: usdcC, method: 'balanceOf', params: [address] });
-            
-            setUserVaultBalances(p => ({ ...p, [key]: shares }));
-            setUserUsdcBalances(p => ({ ...p, [key]: usdc }));
-            setComptrollerAddresses(p => ({ ...p, [key]: comp }));
-          } catch(e) { console.error(e); }
-        }
+    // 2. User Balances (Chain)
+    if (address) {
+      for (const [key, vault] of Object.entries(ENZYME_VAULTS)) {
+        if (!vault.vaultProxy) continue;
+        try {
+          const vc = getContract({ client, chain: vault.chain, address: vault.vaultProxy, abi: VAULT_ABI });
+          const shares = await readContract({ contract: vc, method: 'balanceOf', params: [address] });
+          const comp = await readContract({ contract: vc, method: 'getAccessor', params: [] });
+          const usdcC = getContract({ client, chain: vault.chain, address: vault.denominationAsset, abi: ERC20_ABI });
+          const usdc = await readContract({ contract: usdcC, method: 'balanceOf', params: [address] });
+          
+          setUserVaultBalances(p => ({ ...p, [key]: shares }));
+          setUserUsdcBalances(p => ({ ...p, [key]: usdc }));
+          setComptrollerAddresses(p => ({ ...p, [key]: comp }));
+        } catch(e) { console.error(e); }
       }
     }
-    loadData();
   }, [address]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   // Helpers
   const getUserVaultValue = (key) => {
@@ -95,28 +104,26 @@ function Dashboard({ address }) {
       const val = BigInt(Math.floor(parseFloat(amount) * 1e6));
       const account = await wallet.getAccount();
       
-      // Approve
       const usdcC = getContract({ client, chain: vault.chain, address: vault.denominationAsset, abi: ERC20_ABI });
       const tx1 = prepareContractCall({ contract: usdcC, method: 'approve', params: [comptrollerAddresses[key], val] });
       await sendTransaction({ transaction: tx1, account });
       
-      // Deposit
       const compC = getContract({ client, chain: vault.chain, address: comptrollerAddresses[key], abi: COMPTROLLER_ABI });
       const tx2 = prepareContractCall({ contract: compC, method: 'buyShares', params: [val, 1n] });
       await sendTransaction({ transaction: tx2, account });
       
       alert('Deposit Successful');
-      window.location.reload();
+      loadData(); // Refresh data
+      setDepositModal({open:false});
     } catch(e) { console.error(e); alert('Error: ' + e.message); }
     setIsProcessing(false);
   };
 
   const handleRedeem = async () => {
-    /* Simplified for demo - Use logic from previous detailed version if needed for timelock */
     if (!amount) return;
     setIsProcessing(true);
     try {
-      // Logic would go here (redemption request API etc.)
+      // Logic for redemption would go here
       alert("Redemption request submitted (Demo)");
       setRedeemModal({open:false});
     } catch(e) { alert(e.message); }
@@ -182,14 +189,16 @@ function Dashboard({ address }) {
           </div>
           
           <div className="topbar-right">
-            <div className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+            
+            {/* Bouton Refresh ajouté */}
+            <div className="refresh-btn" onClick={loadData} title="Refresh Data">
+               <i className="ph ph-arrows-clockwise"></i>
+            </div>
+
+            <div className={`theme-toggle ${theme}`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
               <div className="toggle-thumb">{theme === 'dark' ? '🌙' : '☀️'}</div>
             </div>
             
-            <div className="net-pill">
-              <div className="net-dot"></div> Arbitrum
-            </div>
-
             <div className="wallet-capsule">
               <div className="wallet-avatar"></div>
               <span className="wallet-addr mono">{shortAddress}</span>
@@ -202,7 +211,6 @@ function Dashboard({ address }) {
           {/* PANEL: OVERVIEW */}
           {activePanel === 'overview' && (
             <>
-              {/* TOP ROW: Portfolio + Actions */}
               <div className="row-top">
                 <div className="glass-card portfolio-card">
                   <div className="p-header">
@@ -231,10 +239,7 @@ function Dashboard({ address }) {
                 </div>
               </div>
 
-              {/* BOTTOM ROW: Positions + Transactions */}
               <div className="row-bottom">
-                
-                {/* Positions */}
                 <div className="section-col">
                   <div className="section-title"><i className="ph ph-wallet"></i> Your Positions</div>
                   {totalBalance > 0 ? (
@@ -269,27 +274,23 @@ function Dashboard({ address }) {
                   )}
                 </div>
 
-                {/* Transactions (Recent) */}
                 <div className="section-col">
                   <div className="section-title"><i className="ph ph-clock-counter-clockwise"></i> Recent Activity</div>
                   <div className="glass-card" style={{padding:'0 16px'}}>
                     {transactions.length > 0 ? (
-                      <div className="tx-list">
-                        {/* Map transactions here */}
-                      </div>
+                      <div className="tx-list"></div>
                     ) : (
-                      <div style={{padding:'32px', textAlign:'center', color:'#666', fontSize:'13px'}}>
+                      <div style={{padding:'32px', textAlign:'center', color:'var(--text-muted)', fontSize:'13px'}}>
                         No recent activity found.
                       </div>
                     )}
                   </div>
                 </div>
-
               </div>
             </>
           )}
 
-          {/* PANEL: BUY OR SELL (Vaults) */}
+          {/* PANEL: BUY OR SELL */}
           {activePanel === 'buy-sell' && (
             <div className="vault-grid">
               {Object.entries(ENZYME_VAULTS).map(([key, vault]) => (
@@ -316,7 +317,7 @@ function Dashboard({ address }) {
             </div>
           )}
 
-          {/* PANEL: TRANSACTIONS (Full) */}
+          {/* PANEL: TRANSACTIONS */}
           {activePanel === 'transactions' && (
             <div className="glass-card" style={{padding:0, overflow:'hidden'}}>
               <table className="full-tx-table">
@@ -324,7 +325,6 @@ function Dashboard({ address }) {
                   <tr><th>Type</th><th>Asset</th><th>Amount</th><th>Status</th><th>Date</th></tr>
                 </thead>
                 <tbody>
-                  {/* Empty for now */}
                   <tr><td colSpan="5" style={{textAlign:'center', padding:'40px'}}>No transaction history available.</td></tr>
                 </tbody>
               </table>
@@ -334,7 +334,7 @@ function Dashboard({ address }) {
         </div>
       </main>
 
-      {/* MODAL: DEPOSIT */}
+      {/* MODALS */}
       {depositModal.open && (
         <div className="modal-overlay" onClick={() => setDepositModal({open:false})}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
@@ -355,7 +355,6 @@ function Dashboard({ address }) {
         </div>
       )}
 
-      {/* MODAL: REDEEM */}
       {redeemModal.open && (
         <div className="modal-overlay" onClick={() => setRedeemModal({open:false})}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
