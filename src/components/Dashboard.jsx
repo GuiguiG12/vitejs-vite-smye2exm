@@ -6,11 +6,9 @@ import { arbitrum, base } from 'thirdweb/chains';
 
 const client = createThirdwebClient({ clientId: 'ef76c96ae163aba05ebd7e20d94b81fd' });
 
-const API_URL = '';
-
 // Supabase direct REST API
-const SUPABASE_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjcnZhcXp0dmZucGhob3FjYnBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY2MzE4NTAsImV4cCI6MjA2MjIwNzg1MH0.IrNpSrPHLbJIjSc9uoHxTfT21v0PNDZL2lxL3CasnI4';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // ⚠️ COOLDOWN: 2 minutes pour TEST, changer à 72*60*60*1000 (72h) pour production
 const REDEMPTION_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
