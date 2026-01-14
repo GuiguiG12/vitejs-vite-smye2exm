@@ -6,13 +6,9 @@ import { arbitrum, base } from 'thirdweb/chains';
 
 const client = createThirdwebClient({ clientId: 'ef76c96ae163aba05ebd7e20d94b81fd' });
 
-// Supabase direct REST API
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-// ⚠️ COOLDOWN: 2 minutes pour TEST, changer à 72*60*60*1000 (72h) pour production
-const REDEMPTION_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
-// const REDEMPTION_COOLDOWN_MS = 72 * 60 * 60 * 1000; // 72 heures (PRODUCTION)
+// API Endpoints
+const VAULT_API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/FIRECRAWL_DATA';
+const REDEMPTION_API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/REDEMPTION_API';
 
 // ========== ENZYME VAULT CONFIGURATION ==========
 const ENZYME_VAULTS = {
@@ -70,6 +66,7 @@ function Dashboard({ address }) {
   // Redemption cooldown state
   const [pendingRedemptions, setPendingRedemptions] = useState({ arb: null, base: null });
   const [countdowns, setCountdowns] = useState({ arb: null, base: null });
+  const [cooldownSeconds, setCooldownSeconds] = useState(120); // Default, will be updated from API
 
   // Format helpers
   const fmtUsd = (v) => {
@@ -99,6 +96,14 @@ function Dashboard({ address }) {
     return `${seconds}s`;
   };
 
+  const formatCooldownDisplay = () => {
+    if (cooldownSeconds < 3600) {
+      return `${Math.floor(cooldownSeconds / 60)}-minute`;
+    } else {
+      return `${Math.floor(cooldownSeconds / 3600)}-hour`;
+    }
+  };
+
   const shortAddress = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '';
   const avatarText = address ? address.slice(2, 4).toUpperCase() : '0x';
 
@@ -107,41 +112,23 @@ function Dashboard({ address }) {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  // ========== SUPABASE API FUNCTIONS ==========
-  const supabaseRequest = async (table, method, body = null, filters = '') => {
-    const url = `${SUPABASE_URL}/rest/v1/${table}${filters}`;
-    const headers = {
-      'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': 'application/json',
-    };
-    if (method === 'POST') headers['Prefer'] = 'return=representation';
-    
-    const options = { method, headers };
-    if (body) options.body = JSON.stringify(body);
-    
-    const res = await fetch(url, options);
-    if (!res.ok) {
-      const error = await res.text();
-      throw new Error(`Supabase error: ${error}`);
-    }
-    return method === 'DELETE' ? null : res.json();
-  };
-
-  // Fetch pending redemption requests for this wallet
+  // ========== REDEMPTION API FUNCTIONS ==========
   const fetchPendingRedemptions = useCallback(async () => {
     if (!address) return;
     
     try {
-      const data = await supabaseRequest(
-        'redemption_requests',
-        'GET',
-        null,
-        `?wallet_address=eq.${address.toLowerCase()}&status=eq.pending&select=*`
-      );
+      const res = await fetch(`${REDEMPTION_API_URL}?action=pending&wallet=${address}`);
+      const data = await res.json();
+      
+      if (data.error) throw new Error(data.error);
+      
+      // Update cooldown from server
+      if (data.cooldown_seconds) {
+        setCooldownSeconds(data.cooldown_seconds);
+      }
       
       const pending = { arb: null, base: null };
-      for (const req of data || []) {
+      for (const req of data.pending || []) {
         pending[req.vault] = req;
       }
       setPendingRedemptions(pending);
@@ -150,39 +137,35 @@ function Dashboard({ address }) {
     }
   }, [address]);
 
-  // Create a new redemption request
   const createRedemptionRequest = async (vault, sharesAmount, estimatedUsdc) => {
-    const now = new Date();
-    const unlockAt = new Date(now.getTime() + REDEMPTION_COOLDOWN_MS);
+    const res = await fetch(`${REDEMPTION_API_URL}?action=create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        wallet_address: address,
+        vault,
+        shares_amount: sharesAmount,
+        estimated_usdc_value: estimatedUsdc
+      })
+    });
     
-    const request = {
-      wallet_address: address.toLowerCase(),
-      vault,
-      shares_amount: sharesAmount,
-      estimated_usdc_value: estimatedUsdc,
-      requested_at: now.toISOString(),
-      unlock_at: unlockAt.toISOString(),
-      status: 'pending'
-    };
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
     
-    const result = await supabaseRequest('redemption_requests', 'POST', request);
-    return result[0];
+    return data.request;
   };
 
-  // Update redemption request status
   const updateRedemptionStatus = async (id, status, txHash = null) => {
-    const update = { 
-      status,
-      ...(status === 'completed' && { completed_at: new Date().toISOString() }),
-      ...(txHash && { tx_hash: txHash })
-    };
+    const res = await fetch(`${REDEMPTION_API_URL}?action=update`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status, tx_hash: txHash })
+    });
     
-    await supabaseRequest(
-      'redemption_requests',
-      'PATCH',
-      update,
-      `?id=eq.${id}`
-    );
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    
+    return data.request;
   };
 
   // Theme toggle
@@ -197,8 +180,8 @@ function Dashboard({ address }) {
       setLoading(true);
       try {
         const [arbRes, baseRes] = await Promise.all([
-          fetch(`${API_URL}?action=get&network=arbitrum`),
-          fetch(`${API_URL}?action=get&network=base`),
+          fetch(`${VAULT_API_URL}?action=get&network=arbitrum`),
+          fetch(`${VAULT_API_URL}?action=get&network=base`),
         ]);
         const arbData = await arbRes.json();
         const baseData = await baseRes.json();
@@ -355,12 +338,12 @@ function Dashboard({ address }) {
       const sharePrice = vaultData[vaultKey]?.share_price || 1;
       const estimatedUsdc = sharesAmount * sharePrice;
 
-      // Create redemption request in Supabase
+      // Create redemption request via API
       const request = await createRedemptionRequest(vaultKey, sharesAmount, estimatedUsdc);
       
       setPendingRedemptions(prev => ({ ...prev, [vaultKey]: request }));
       
-      showNotification(`Redemption request submitted! You can withdraw in ${formatCountdown(REDEMPTION_COOLDOWN_MS)}`, 'success');
+      showNotification(`Redemption request submitted! You can withdraw in ${formatCountdown(cooldownSeconds * 1000)}`, 'success');
       setRedeemAmount('');
       
     } catch (err) {
@@ -397,7 +380,7 @@ function Dashboard({ address }) {
       });
       const result = await sendTransaction({ transaction: redeemTx, account });
 
-      // Update status in Supabase
+      // Update status via API
       await updateRedemptionStatus(pending.id, 'completed', result?.transactionHash);
       
       showNotification(`Successfully redeemed ${pending.shares_amount} shares!`, 'success');
@@ -575,7 +558,7 @@ function Dashboard({ address }) {
                 <div className="cooldown-warning">
                   <span className="warning-icon">⏱️</span>
                   <div>
-                    <strong>2-minute waiting period</strong>
+                    <strong>{formatCooldownDisplay()} waiting period</strong>
                     <p>After submitting, you'll need to wait before completing the withdrawal.</p>
                   </div>
                 </div>
