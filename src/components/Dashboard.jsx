@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useDisconnect, useActiveWallet } from 'thirdweb/react';
-import { getContract, readContract, prepareContractCall, sendTransaction } from 'thirdweb';
+import { getContract, readContract, prepareContractCall, sendTransaction, waitForReceipt } from 'thirdweb';
 import { createThirdwebClient } from 'thirdweb';
 import { arbitrum, base } from 'thirdweb/chains';
 import { AreaChart, Area, Tooltip, ResponsiveContainer, XAxis, YAxis } from 'recharts';
@@ -302,15 +302,23 @@ function Dashboard({ address }) {
         return;
       }
 
-      // Approve USDC
+      // Approve USDC - WAIT FOR CONFIRMATION
+      showNotification('Approving USDC...', 'info');
       const usdcContract = getContract({ client, chain: vault.chain, address: vault.denominationAsset, abi: ERC20_ABI });
       const approveTx = prepareContractCall({ contract: usdcContract, method: 'approve', params: [comptrollerAddr, amount] });
-      await sendTransaction({ transaction: approveTx, account });
-
+      const approveResult = await sendTransaction({ transaction: approveTx, account });
+      
+      // Wait for approval to be mined
+      await waitForReceipt({ client, chain: vault.chain, transactionHash: approveResult.transactionHash });
+      
       // Buy Shares
+      showNotification('Depositing...', 'info');
       const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
       const depositTx = prepareContractCall({ contract: comptrollerContract, method: 'buyShares', params: [amount, 1n] });
-      await sendTransaction({ transaction: depositTx, account });
+      const depositResult = await sendTransaction({ transaction: depositTx, account });
+      
+      // Wait for deposit to be mined
+      await waitForReceipt({ client, chain: vault.chain, transactionHash: depositResult.transactionHash });
 
       showNotification(`Successfully deposited ${depositAmount} USDC!`, 'success');
       setDepositModal({ open: false, vault: 'arb' });
@@ -386,6 +394,10 @@ function Dashboard({ address }) {
         params: [address, sharesAmount, [vault.denominationAsset], [10000n]]
       });
       const result = await sendTransaction({ transaction: redeemTx, account });
+      
+      // Wait for redemption to be mined
+      await waitForReceipt({ client, chain: vault.chain, transactionHash: result.transactionHash });
+      
       await updateRedemptionStatus(pending.id, 'completed', result?.transactionHash);
       
       showNotification(`Successfully redeemed ${pending.shares_amount.toFixed(4)} shares!`, 'success');
