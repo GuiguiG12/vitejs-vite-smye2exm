@@ -8,8 +8,10 @@ import { AreaChart, Area, Tooltip, ResponsiveContainer, XAxis, YAxis } from 'rec
 const client = createThirdwebClient({ clientId: 'ef76c96ae163aba05ebd7e20d94b81fd' });
 
 // API Endpoints
-const VAULT_API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/FIRECRAWL_DATA';
-const REDEMPTION_API_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1/REDEMPTION_API';
+const SUPABASE_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1';
+const VAULT_API_URL = `${SUPABASE_URL}/FIRECRAWL_DATA`;
+const REDEMPTION_API_URL = `${SUPABASE_URL}/REDEMPTION_API`;
+const WALLET_DATA_URL = `${SUPABASE_URL}/wallet-data`;
 
 // ========== REAL ENZYME VAULT CONFIGURATION ==========
 const ENZYME_VAULTS = {
@@ -22,7 +24,8 @@ const ENZYME_VAULTS = {
     color: '#E85A04',
     enzymeUrl: 'https://app.enzyme.finance/vault/0xc9e50e08739a4aec211f2e8e95f1ab45b923cc20?network=arbitrum',
     icon: '/favicon_arbitrum.svg',
-    emoji: '📈'
+    emoji: '📈',
+    vaultId: 1
   },
   base: {
     name: 'Stable Yield',
@@ -33,7 +36,8 @@ const ENZYME_VAULTS = {
     color: '#0052FF',
     enzymeUrl: 'https://app.enzyme.finance/vault/0xbfa811e1f065c9b66b02d8ae408d4d9b9be70a22?network=base',
     icon: '/favicon_base.jpeg',
-    emoji: '🛡️'
+    emoji: '🛡️',
+    vaultId: 2
   }
 };
 
@@ -65,12 +69,16 @@ function Dashboard({ address }) {
   
   // Data State
   const [vaultData, setVaultData] = useState({ arb: null, base: null });
-  const [historyData, setHistoryData] = useState({ arb: [], base: [] });
-  const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [chartRange, setChartRange] = useState('1W');
 
-  // User Balances
+  // NEW: Wallet data from Supabase
+  const [walletSummary, setWalletSummary] = useState(null);
+  const [portfolioChart, setPortfolioChart] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [pnlData, setPnlData] = useState(null);
+
+  // User Balances (from blockchain)
   const [userVaultBalances, setUserVaultBalances] = useState({ arb: 0n, base: 0n });
   const [userUsdcBalances, setUserUsdcBalances] = useState({ arb: 0n, base: 0n });
   const [comptrollerAddresses, setComptrollerAddresses] = useState({ arb: null, base: null });
@@ -85,7 +93,7 @@ function Dashboard({ address }) {
   // Redemption Cooldown State (72h)
   const [pendingRedemptions, setPendingRedemptions] = useState({ arb: null, base: null });
   const [countdowns, setCountdowns] = useState({ arb: null, base: null });
-  const [cooldownSeconds, setCooldownSeconds] = useState(259200); // 72 hours default
+  const [cooldownSeconds, setCooldownSeconds] = useState(259200);
 
   // ========== FORMAT HELPERS ==========
   const fmtUsd = (v) => {
@@ -121,6 +129,11 @@ function Dashboard({ address }) {
     return `${Math.floor(cooldownSeconds / 3600)} hours`;
   };
 
+  const formatDate = (dateStr) => {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
   const shortAddress = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '';
 
   const showNotification = (message, type = 'info') => {
@@ -132,6 +145,56 @@ function Dashboard({ address }) {
   useEffect(() => { 
     document.documentElement.setAttribute('data-theme', theme); 
   }, [theme]);
+
+  // ========== FETCH WALLET DATA FROM SUPABASE ==========
+  const fetchWalletData = useCallback(async () => {
+    if (!address) return;
+    
+    try {
+      // Fetch summary (P&L, positions)
+      const summaryRes = await fetch(`${WALLET_DATA_URL}?action=summary&wallet=${address}`);
+      const summaryData = await summaryRes.json();
+      if (summaryData.ok) {
+        setWalletSummary(summaryData);
+      }
+
+      // Fetch transactions
+      const txRes = await fetch(`${WALLET_DATA_URL}?action=transactions&wallet=${address}&limit=50`);
+      const txData = await txRes.json();
+      if (txData.ok) {
+        setTransactions(txData.transactions || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch wallet data:', err);
+    }
+  }, [address]);
+
+  // Fetch chart data based on range
+  const fetchChartData = useCallback(async () => {
+    if (!address) return;
+    
+    try {
+      const chartRes = await fetch(`${WALLET_DATA_URL}?action=chart&wallet=${address}&range=${chartRange}`);
+      const chartData = await chartRes.json();
+      if (chartData.ok && chartData.points) {
+        const formatted = chartData.points.map(p => ({
+          date: new Date(p.t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          timestamp: new Date(p.t).getTime(),
+          value: p.v
+        }));
+        setPortfolioChart(formatted);
+      }
+
+      // Fetch P&L for current range
+      const pnlRes = await fetch(`${WALLET_DATA_URL}?action=pnl&wallet=${address}&range=${chartRange}`);
+      const pnlResult = await pnlRes.json();
+      if (pnlResult.ok) {
+        setPnlData(pnlResult);
+      }
+    } catch (err) {
+      console.error('Failed to fetch chart data:', err);
+    }
+  }, [address, chartRange]);
 
   // ========== REDEMPTION API FUNCTIONS ==========
   const fetchPendingRedemptions = useCallback(async () => {
@@ -177,28 +240,14 @@ function Dashboard({ address }) {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [arbRes, baseRes, arbHistRes, baseHistRes] = await Promise.all([
+      const [arbRes, baseRes] = await Promise.all([
         fetch(`${VAULT_API_URL}?action=get&network=arbitrum`),
         fetch(`${VAULT_API_URL}?action=get&network=base`),
-        fetch(`${VAULT_API_URL}?action=history&network=arbitrum`),
-        fetch(`${VAULT_API_URL}?action=history&network=base`),
       ]);
-      const [arbData, baseData, arbHist, baseHist] = await Promise.all([
-        arbRes.json(), baseRes.json(), arbHistRes.json(), baseHistRes.json()
+      const [arbData, baseData] = await Promise.all([
+        arbRes.json(), baseRes.json()
       ]);
       setVaultData({ arb: arbData, base: baseData });
-      setHistoryData({ arb: arbHist, base: baseHist });
-
-      // Process Chart Data
-      if (arbHist && Array.isArray(arbHist)) {
-        const formatted = arbHist.map(item => ({
-          date: new Date(item.scraped_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-          timestamp: new Date(item.scraped_at).getTime(),
-          sharePrice: Number(item.share_price),
-          aum: Number(item.aum)
-        })).sort((a, b) => a.timestamp - b.timestamp);
-        setChartData(formatted);
-      }
     } catch (err) {
       console.error('Failed to fetch vault data:', err);
     }
@@ -231,6 +280,8 @@ function Dashboard({ address }) {
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { fetchUserBalances(); }, [fetchUserBalances]);
   useEffect(() => { fetchPendingRedemptions(); }, [fetchPendingRedemptions]);
+  useEffect(() => { fetchWalletData(); }, [fetchWalletData]);
+  useEffect(() => { fetchChartData(); }, [fetchChartData]);
 
   // Countdown timer
   useEffect(() => {
@@ -255,20 +306,13 @@ function Dashboard({ address }) {
     return shares * sharePrice;
   };
 
-  const totalBalance = getUserVaultValue('arb') + getUserVaultValue('base');
+  // Use walletSummary if available, otherwise calculate from blockchain
+  const totalBalance = walletSummary?.current_value ?? (getUserVaultValue('arb') + getUserVaultValue('base'));
   const walletUsdc = (Number(userUsdcBalances.arb) + Number(userUsdcBalances.base)) / 1e6;
-
-  // Filter chart data by range
-  const getFilteredChartData = () => {
-    const now = Date.now();
-    const ranges = {
-      '1W': 7 * 24 * 60 * 60 * 1000,
-      '1M': 30 * 24 * 60 * 60 * 1000,
-      'ALL': Infinity
-    };
-    const cutoff = now - ranges[chartRange];
-    return chartData.filter(d => d.timestamp >= cutoff);
-  };
+  
+  // P&L values
+  const pnlUsd = pnlData?.pnl_usd ?? walletSummary?.pnl_usd ?? 0;
+  const pnlPercent = pnlData?.pnl_percent ?? walletSummary?.pnl_percent ?? 0;
 
   // ========== DEPOSIT FUNCTION ==========
   const handleDeposit = async () => {
@@ -302,28 +346,23 @@ function Dashboard({ address }) {
         return;
       }
 
-      // Approve USDC - WAIT FOR CONFIRMATION
       showNotification('Approving USDC...', 'info');
       const usdcContract = getContract({ client, chain: vault.chain, address: vault.denominationAsset, abi: ERC20_ABI });
       const approveTx = prepareContractCall({ contract: usdcContract, method: 'approve', params: [comptrollerAddr, amount] });
       const approveResult = await sendTransaction({ transaction: approveTx, account });
-      
-      // Wait for approval to be mined
       await waitForReceipt({ client, chain: vault.chain, transactionHash: approveResult.transactionHash });
       
-      // Buy Shares
       showNotification('Depositing...', 'info');
       const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
       const depositTx = prepareContractCall({ contract: comptrollerContract, method: 'buyShares', params: [amount, 1n] });
       const depositResult = await sendTransaction({ transaction: depositTx, account });
-      
-      // Wait for deposit to be mined
       await waitForReceipt({ client, chain: vault.chain, transactionHash: depositResult.transactionHash });
 
       showNotification(`Successfully deposited ${depositAmount} USDC!`, 'success');
       setDepositModal({ open: false, vault: 'arb' });
       setDepositAmount('');
       fetchUserBalances();
+      fetchWalletData();
     } catch (err) {
       console.error('Deposit error:', err);
       showNotification(err.message || 'Deposit failed', 'error');
@@ -332,7 +371,7 @@ function Dashboard({ address }) {
     }
   };
 
-  // ========== REDEMPTION REQUEST ==========
+  // ========== REDEMPTION FUNCTIONS ==========
   const handleRedemptionRequest = async () => {
     const vaultKey = redeemModal.vault;
     const vault = ENZYME_VAULTS[vaultKey];
@@ -370,7 +409,6 @@ function Dashboard({ address }) {
     }
   };
 
-  // ========== EXECUTE REDEMPTION ==========
   const executeRedemption = async () => {
     const vaultKey = redeemModal.vault;
     const vault = ENZYME_VAULTS[vaultKey];
@@ -394,8 +432,6 @@ function Dashboard({ address }) {
         params: [address, sharesAmount, [vault.denominationAsset], [10000n]]
       });
       const result = await sendTransaction({ transaction: redeemTx, account });
-      
-      // Wait for redemption to be mined
       await waitForReceipt({ client, chain: vault.chain, transactionHash: result.transactionHash });
       
       await updateRedemptionStatus(pending.id, 'completed', result?.transactionHash);
@@ -404,6 +440,7 @@ function Dashboard({ address }) {
       setRedeemModal({ open: false, vault: 'arb' });
       setPendingRedemptions(prev => ({ ...prev, [vaultKey]: null }));
       fetchUserBalances();
+      fetchWalletData();
     } catch (err) {
       console.error('Redeem error:', err);
       showNotification(err.message || 'Redemption failed', 'error');
@@ -500,7 +537,7 @@ function Dashboard({ address }) {
             <span>{activePanel === 'overview' ? 'Overview' : activePanel === 'buy-sell' ? 'Buy / Sell' : activePanel === 'transactions' ? 'Transactions' : 'Settings'}</span>
           </div>
           <div className="topbar-right">
-            <div className="refresh-btn" onClick={loadData} title="Refresh Data">
+            <div className="refresh-btn" onClick={() => { loadData(); fetchWalletData(); fetchChartData(); }} title="Refresh Data">
               <i className="ph ph-arrows-clockwise"></i>
             </div>
 
@@ -533,23 +570,38 @@ function Dashboard({ address }) {
                   <div className="p-header">
                     <h2>Total Portfolio</h2>
                     <div className="p-balance mono">{fmtUsd(totalBalance)}</div>
-                    <div className="p-change">
-                      <i className="ph ph-trend-up"></i>
-                      APY {vaultData.arb ? fmtPercent(vaultData.arb.monthly_return * 12) : '—'}
+                    <div className={`p-change ${pnlUsd >= 0 ? 'positive' : 'negative'}`}>
+                      <i className={`ph ${pnlUsd >= 0 ? 'ph-trend-up' : 'ph-trend-down'}`}></i>
+                      {fmtUsd(Math.abs(pnlUsd))} ({fmtPercent(pnlPercent)})
+                      <span className="pnl-period">({chartRange})</span>
                     </div>
                   </div>
 
+                  {/* Time Range Selector */}
+                  <div className="chart-range-btns top-range">
+                    {['1D', '1W', '1M', 'ALL'].map(r => (
+                      <button 
+                        key={r} 
+                        className={`range-btn ${chartRange === r ? 'active' : ''}`} 
+                        onClick={() => setChartRange(r)}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+
                   {/* Chart */}
-                  <div style={{ width: '100%', height: '180px', marginTop: 'auto' }}>
+                  <div style={{ width: '100%', height: '180px', marginTop: '16px' }}>
                     {loading ? (
                       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
-                        Syncing blockchain data...
+                        <i className="ph ph-spinner spinning" style={{ marginRight: '8px' }}></i>
+                        Loading chart data...
                       </div>
-                    ) : (
+                    ) : portfolioChart.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={getFilteredChartData()}>
+                        <AreaChart data={portfolioChart}>
                           <defs>
-                            <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                            <linearGradient id="colorPortfolio" x1="0" y1="0" x2="0" y2="1">
                               <stop offset="5%" stopColor="#E85A04" stopOpacity={0.3} />
                               <stop offset="95%" stopColor="#E85A04" stopOpacity={0} />
                             </linearGradient>
@@ -559,30 +611,26 @@ function Dashboard({ address }) {
                           <Tooltip
                             contentStyle={{ backgroundColor: 'var(--bg-root)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--text-main)' }}
                             itemStyle={{ color: 'var(--text-main)' }}
-                            formatter={(value) => [fmtUsd(totalBalance > 0 ? value * (totalBalance / (vaultData.arb?.share_price || 1)) / 1000 : value * 1000), totalBalance > 0 ? 'Portfolio Value' : 'Strategy (Base 1000)']}
+                            formatter={(value) => [fmtUsd(value), 'Portfolio Value']}
                             labelFormatter={(label) => label}
                           />
                           <Area
                             type="monotone"
-                            dataKey="sharePrice"
+                            dataKey="value"
                             stroke="#E85A04"
                             strokeWidth={2}
                             fillOpacity={1}
-                            fill="url(#colorVal)"
+                            fill="url(#colorPortfolio)"
                             isAnimationActive={false}
                           />
                         </AreaChart>
                       </ResponsiveContainer>
+                    ) : (
+                      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+                        <i className="ph ph-chart-line" style={{ marginRight: '8px', fontSize: '18px' }}></i>
+                        No chart data available yet
+                      </div>
                     )}
-                  </div>
-
-                  {/* Chart Range Controls */}
-                  <div className="chart-range-btns">
-                    {['1W', '1M', 'ALL'].map(r => (
-                      <button key={r} className={`range-btn ${chartRange === r ? 'active' : ''}`} onClick={() => setChartRange(r)}>
-                        {r}
-                      </button>
-                    ))}
                   </div>
                 </div>
 
@@ -596,6 +644,12 @@ function Dashboard({ address }) {
                         {fmtUsd(walletUsdc)}
                       </div>
                     </div>
+                    {walletSummary && (
+                      <div style={{ textAlign: 'right' }}>
+                        <div className="av-label">Net Invested</div>
+                        <div className="av-val mono" style={{ fontSize: '16px' }}>{fmtUsd(walletSummary.net_invested)}</div>
+                      </div>
+                    )}
                   </div>
                   <div className="action-btns">
                     <button className="act-btn primary" onClick={() => setDepositModal({ open: true, vault: 'arb' })}>
@@ -614,36 +668,40 @@ function Dashboard({ address }) {
                   <div className="section-title"><i className="ph ph-wallet"></i> Your Positions</div>
                   {totalBalance > 0 ? (
                     <div className="positions-list">
-                      {Object.entries(ENZYME_VAULTS).map(([key, vault]) => (
-                        <div className="pos-item" key={key} onClick={() => setActivePanel('buy-sell')}>
-                          <div className="pos-main">
-                            <img src={vault.icon} className="pos-icon" alt={vault.name} />
-                            <div className="pos-info">
-                              <h4>{vault.name}</h4>
-                              <span>{vault.network}</span>
-                            </div>
-                          </div>
-                          <div className="pos-stats">
-                            <div className="pos-stat-grp">
-                              <label>APY</label>
-                              <span className="pos-apy">{vaultData[key] ? fmtPercent(vaultData[key].monthly_return * 12) : '—'}</span>
-                            </div>
-                            <div className="pos-stat-grp">
-                              <label>Balance</label>
-                              <span className="mono">{fmtUsd(getUserVaultValue(key))}</span>
-                            </div>
-                            {hasPendingRedemption(key) && (
-                              <div className="pos-stat-grp">
-                                <label>Status</label>
-                                <span className="pending-badge">
-                                  <i className="ph ph-clock"></i>
-                                  {isRedemptionReady(key) ? 'Ready' : formatCountdown(countdowns[key])}
-                                </span>
+                      {Object.entries(ENZYME_VAULTS).map(([key, vault]) => {
+                        const positionValue = getUserVaultValue(key);
+                        if (positionValue <= 0) return null;
+                        return (
+                          <div className="pos-item" key={key} onClick={() => setActivePanel('buy-sell')}>
+                            <div className="pos-main">
+                              <img src={vault.icon} className="pos-icon" alt={vault.name} />
+                              <div className="pos-info">
+                                <h4>{vault.name}</h4>
+                                <span>{vault.network}</span>
                               </div>
-                            )}
+                            </div>
+                            <div className="pos-stats">
+                              <div className="pos-stat-grp">
+                                <label>APY</label>
+                                <span className="pos-apy">{vaultData[key] ? fmtPercent(vaultData[key].monthly_return * 12) : '—'}</span>
+                              </div>
+                              <div className="pos-stat-grp">
+                                <label>Balance</label>
+                                <span className="mono">{fmtUsd(positionValue)}</span>
+                              </div>
+                              {hasPendingRedemption(key) && (
+                                <div className="pos-stat-grp">
+                                  <label>Status</label>
+                                  <span className="pending-badge">
+                                    <i className="ph ph-clock"></i>
+                                    {isRedemptionReady(key) ? 'Ready' : formatCountdown(countdowns[key])}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="empty-box">
@@ -656,11 +714,35 @@ function Dashboard({ address }) {
                 {/* Recent Activity */}
                 <div className="section-col">
                   <div className="section-title"><i className="ph ph-clock-counter-clockwise"></i> Recent Activity</div>
-                  <div className="glass-card" style={{ padding: '0 16px', minHeight: '200px' }}>
-                    <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                      <i className="ph ph-scroll" style={{ fontSize: '24px', marginBottom: '10px', opacity: 0.5 }}></i>
-                      No recent transactions found on-chain.
-                    </div>
+                  <div className="glass-card" style={{ padding: '0', minHeight: '200px' }}>
+                    {transactions.length > 0 ? (
+                      <div className="tx-list">
+                        {transactions.slice(0, 5).map((tx, i) => (
+                          <div key={i} className="tx-item">
+                            <div className="tx-icon" style={{ background: tx.type === 'DEPOSIT' ? 'var(--success-bg)' : 'var(--error-bg)', color: tx.type === 'DEPOSIT' ? 'var(--success)' : 'var(--error)' }}>
+                              <i className={`ph ${tx.type === 'DEPOSIT' ? 'ph-arrow-down' : 'ph-arrow-up'}`}></i>
+                            </div>
+                            <div className="tx-details">
+                              <div className="tx-type">{tx.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'}</div>
+                              <div className="tx-meta">{tx.vault} • {formatDate(tx.timestamp)}</div>
+                            </div>
+                            <div className={`tx-amount ${tx.type === 'DEPOSIT' ? 'positive' : 'negative'}`}>
+                              {tx.type === 'DEPOSIT' ? '+' : '-'}{fmtUsd(tx.amount_usd)}
+                            </div>
+                          </div>
+                        ))}
+                        {transactions.length > 5 && (
+                          <div className="tx-more" onClick={() => setActivePanel('transactions')}>
+                            View all transactions →
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                        <i className="ph ph-scroll" style={{ fontSize: '24px', marginBottom: '10px', opacity: 0.5 }}></i>
+                        No transactions yet
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -715,7 +797,6 @@ function Dashboard({ address }) {
                     </div>
                   </div>
 
-                  {/* Pending Redemption Info */}
                   {hasPendingRedemption(key) && (
                     <div className={`redemption-status ${isRedemptionReady(key) ? 'ready' : 'pending'}`}>
                       <div className="status-header">
@@ -780,16 +861,45 @@ function Dashboard({ address }) {
                     <th>Vault</th>
                     <th>Amount</th>
                     <th>Date</th>
-                    <th>Status</th>
+                    <th>Tx Hash</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr>
-                    <td colSpan="5" style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                      <i className="ph ph-scroll" style={{ fontSize: '24px', marginBottom: '10px', display: 'block', opacity: 0.5 }}></i>
-                      No transaction history available.
-                    </td>
-                  </tr>
+                  {transactions.length > 0 ? (
+                    transactions.map((tx, i) => (
+                      <tr key={i}>
+                        <td>
+                          <span className={`tx-badge ${tx.type === 'DEPOSIT' ? 'deposit' : 'withdraw'}`}>
+                            <i className={`ph ${tx.type === 'DEPOSIT' ? 'ph-arrow-down' : 'ph-arrow-up'}`}></i>
+                            {tx.type === 'DEPOSIT' ? 'Deposit' : 'Withdraw'}
+                          </span>
+                        </td>
+                        <td>{tx.vault}</td>
+                        <td className={`mono ${tx.type === 'DEPOSIT' ? 'positive' : 'negative'}`}>
+                          {tx.type === 'DEPOSIT' ? '+' : '-'}{fmtUsd(tx.amount_usd)}
+                        </td>
+                        <td>{formatDate(tx.timestamp)}</td>
+                        <td>
+                          <a 
+                            href={`https://${tx.network === 'base' ? 'basescan.org' : 'arbiscan.io'}/tx/${tx.tx_hash}`} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="tx-link"
+                          >
+                            {tx.tx_hash.slice(0, 8)}...{tx.tx_hash.slice(-6)}
+                            <i className="ph ph-arrow-square-out"></i>
+                          </a>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="5" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                        <i className="ph ph-scroll" style={{ fontSize: '32px', marginBottom: '12px', display: 'block', opacity: 0.5 }}></i>
+                        No transaction history available
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -820,6 +930,24 @@ function Dashboard({ address }) {
                   <span className="setting-label">USDC Balance (Base)</span>
                   <span className="setting-value">{fmtUsd(Number(userUsdcBalances.base) / 1e6)}</span>
                 </div>
+                {walletSummary && (
+                  <>
+                    <div className="setting-item">
+                      <span className="setting-label">Total Deposited (All Time)</span>
+                      <span className="setting-value">{fmtUsd(walletSummary.total_deposited)}</span>
+                    </div>
+                    <div className="setting-item">
+                      <span className="setting-label">Total Withdrawn (All Time)</span>
+                      <span className="setting-value">{fmtUsd(walletSummary.total_withdrawn)}</span>
+                    </div>
+                    <div className="setting-item">
+                      <span className="setting-label">All-Time P&L</span>
+                      <span className={`setting-value ${walletSummary.pnl_usd >= 0 ? 'positive' : 'negative'}`}>
+                        {fmtUsd(walletSummary.pnl_usd)} ({fmtPercent(walletSummary.pnl_percent)})
+                      </span>
+                    </div>
+                  </>
+                )}
                 <button className="btn btn-secondary btn-danger" onClick={handleLogout} style={{ marginTop: '16px' }}>
                   <i className="ph ph-sign-out"></i> Disconnect Wallet
                 </button>
