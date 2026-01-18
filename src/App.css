@@ -1831,4 +1831,826 @@
        grid-template-columns: 1fr;
      }
    }
-   
+   /* =========================================
+   LOGIN VIEW STYLES (from logintest.html)
+   Add these to your App.css
+   ========================================= */
+
+/* LOGIN VIEW CONTAINER */
+.login-view {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-light, #EBECEF);
+}
+
+/* =========================================
+   LEFT SIDE (LIGHT GREY THEME)
+   ========================================= */
+.login-view .login-left {
+  width: 40%;
+  min-width: 480px;
+  background: #EBECEF;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 60px 80px;
+  position: relative;
+  z-index: 20;
+  box-shadow: 10px 0 40px rgba(0, 0, 0, 0.05);
+}
+
+.login-view .brand-logo {
+  margin-bottom: 60px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-view .brand-logo img {
+  height: 28px;
+  filter: invert(1);
+}
+
+.login-view .brand-text {
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: -0.5px;
+  color: #0a0a0a;
+}
+
+.login-view .hero-text h1 {
+  font-size: 48px;
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  line-height: 1.1;
+  margin-bottom: 24px;
+  color: #0a0a0a;
+}
+
+.login-view .hero-text p {
+  font-size: 16px;
+  color: #555;
+  line-height: 1.6;
+  margin-bottom: 48px;
+  max-width: 440px;
+  font-weight: 400;
+}
+
+/* CONNECT BUTTON CONTAINER */
+.login-view .connect-container {
+  margin-bottom: 48px;
+}
+
+/* Override thirdweb button to match design */
+.login-view .connect-container button,
+.login-view .btn-get-started {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 10px !important;
+  background: linear-gradient(135deg, #FF9E66 0%, #E85A04 100%) !important;
+  color: white !important;
+  border: none !important;
+  width: 100% !important;
+  max-width: 320px !important;
+  padding: 16px !important;
+  border-radius: 12px !important;
+  font-weight: 700 !important;
+  font-size: 16px !important;
+  text-decoration: none !important;
+  cursor: pointer !important;
+  transition: transform 0.2s, box-shadow 0.2s !important;
+  box-shadow: 0 10px 30px rgba(232, 90, 4, 0.25) !important;
+}
+
+.login-view .connect-container button:hover,
+.login-view .btn-get-started:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 15px 40px rgba(232, 90, 4, 0.35) !important;
+}
+
+/* TRUST ROW */
+.login-view .trust-row {
+  display: flex;
+  gap: 32px;
+  margin-top: 20px;
+}
+
+.login-view .trust-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #555;
+}
+
+.login-view .trust-icon {
+  font-size: 18px;
+}
+
+/* =========================================
+   RIGHT SIDE (DARK THEME WITH MOCKUP)
+   ========================================= */
+.login-view .login-right {
+  flex: 1;
+  background: radial-gradient(circle at center, #2a2a2a 0%, #111111 100%);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  perspective: 2000px;
+  overflow: hidden;
+}
+
+.login-view .grid-bg {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(circle at center, black 40%, transparent 80%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* MOCKUP SCENE */
+.login-view .mockup-scene {
+  position: relative;
+  z-index: 10;
+  width: 1000px;
+  height: 680px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-style: preserve-3d;
+  transform-origin: center center;
+  opacity: 0;
+  animation: slideInRight 1.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes slideInRight {
+  0% {
+    opacity: 0;
+    margin-left: 300px;
+  }
+  100% {
+    opacity: 1;
+    margin-left: 0;
+  }
+}
+
+/* RESPONSIVE SCALING */
+@media (min-width: 1600px) {
+  .login-view .mockup-scene {
+    transform: scale(1.1) rotateX(5deg) rotateY(-10deg) rotateZ(2deg);
+  }
+}
+
+@media (max-width: 1599px) and (min-width: 1367px) {
+  .login-view .mockup-scene {
+    transform: scale(0.9) rotateX(5deg) rotateY(-10deg) rotateZ(2deg);
+  }
+}
+
+@media (max-width: 1366px) {
+  .login-view .mockup-scene {
+    transform: scale(0.65) rotateX(5deg) rotateY(-10deg) rotateZ(2deg);
+  }
+}
+
+@media (max-width: 1100px) {
+  .login-view {
+    flex-direction: column;
+    height: auto;
+    overflow-y: auto;
+  }
+  .login-view .login-left {
+    width: 100%;
+    min-width: unset;
+    min-height: 100vh;
+    padding: 40px;
+    box-shadow: none;
+  }
+  .login-view .login-right {
+    display: none;
+  }
+}
+
+/* DESKTOP DEVICE */
+.login-view .device-desktop {
+  width: 1000px;
+  height: 640px;
+  background: #0a0a0a;
+  border: 1px solid #333;
+  border-radius: 16px;
+  box-shadow: 0 60px 140px -20px rgba(0, 0, 0, 0.8);
+  position: relative;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.login-view .screen {
+  position: absolute;
+  inset: 0;
+  background: #050505;
+  display: flex;
+  font-family: 'Inter', sans-serif;
+  color: white;
+}
+
+/* SIDEBAR */
+.login-view .s-sidebar {
+  width: 240px;
+  background: #0a0a0a;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.login-view .s-brand {
+  margin-bottom: 30px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 15px;
+  color: white;
+}
+
+.login-view .s-section-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #666;
+  margin: 16px 0 8px 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.login-view .s-item {
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #888;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.login-view .s-item.active {
+  background: rgba(255, 255, 255, 0.05);
+  color: white;
+  border-left: 3px solid #E85A04;
+}
+
+.login-view .s-item i {
+  font-size: 18px;
+}
+
+/* MAIN AREA */
+.login-view .s-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #050505;
+}
+
+.login-view .s-topbar {
+  height: 72px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+}
+
+.login-view .s-bread {
+  font-size: 14px;
+  color: #888;
+}
+
+.login-view .s-bread span {
+  color: white;
+  font-weight: 500;
+}
+
+.login-view .s-top-right {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.login-view .s-refresh {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.login-view .s-wallet {
+  background: #0a0a0a;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 50px;
+  padding: 6px 16px 6px 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  color: white;
+}
+
+.login-view .s-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #E85A04, #8B5CF6);
+}
+
+.login-view .s-body {
+  padding: 32px;
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 340px 1fr;
+  gap: 24px;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* CARD: PORTFOLIO */
+.login-view .card-portfolio {
+  background: rgba(20, 20, 20, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 32px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.login-view .card-portfolio::before {
+  content: '';
+  position: absolute;
+  top: -100px;
+  left: -100px;
+  width: 300px;
+  height: 300px;
+  background: #E85A04;
+  filter: blur(150px);
+  opacity: 0.1;
+}
+
+.login-view .cp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.login-view .cp-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: #888;
+  margin-bottom: 8px;
+  letter-spacing: 1px;
+}
+
+.login-view .cp-val {
+  font-size: 48px;
+  font-weight: 700;
+  color: white;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: -1px;
+}
+
+.login-view .cp-change {
+  font-size: 14px;
+  color: #10B981;
+  background: rgba(16, 185, 129, 0.15);
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.login-view .range-active {
+  font-size: 10px;
+  padding: 4px 8px;
+  background: #E85A04;
+  border-radius: 6px;
+  color: white;
+}
+
+.login-view .range-inactive {
+  font-size: 10px;
+  padding: 4px 8px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #666;
+}
+
+.login-view .chart-container {
+  flex: 1;
+  position: relative;
+  width: 100%;
+  margin-top: auto;
+  height: 100%;
+}
+
+.login-view svg.chart {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.login-view path.line {
+  fill: none;
+  stroke: #E85A04;
+  stroke-width: 3;
+  stroke-dasharray: 2000;
+  stroke-dashoffset: 2000;
+  animation: drawGraph 2.5s ease-out forwards 0.5s;
+  filter: drop-shadow(0 0 15px rgba(232, 90, 4, 0.4));
+}
+
+.login-view path.area {
+  fill: url(#grad);
+  opacity: 0;
+  animation: fadeInArea 1s ease-out 2s forwards;
+}
+
+@keyframes drawGraph {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes fadeInArea {
+  to {
+    opacity: 0.25;
+  }
+}
+
+/* CARD: WALLET */
+.login-view .card-wallet {
+  background: rgba(20, 20, 20, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.login-view .cw-bal-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.login-view .cw-bal {
+  font-size: 28px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  color: white;
+}
+
+.login-view .cw-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.login-view .cw-btn {
+  height: 100px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #888;
+  transition: 0.2s;
+}
+
+.login-view .cw-btn i {
+  font-size: 24px;
+  color: white;
+}
+
+.login-view .cw-btn.primary i {
+  color: #E85A04;
+}
+
+/* ROW 2 - POSITIONS & ACTIVITY */
+.login-view .card-positions {
+  grid-column: span 1;
+  background: rgba(20, 20, 20, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 24px;
+}
+
+.login-view .card-activity {
+  grid-column: span 1;
+  background: rgba(20, 20, 20, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 24px;
+}
+
+.login-view .row-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: white;
+}
+
+.login-view .pos-item-login {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  margin-bottom: 12px;
+}
+
+.login-view .pos-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.login-view .pos-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+}
+
+.login-view .pos-info div:first-child {
+  font-size: 15px;
+  font-weight: 600;
+  color: white;
+}
+
+.login-view .pos-info div:last-child {
+  font-size: 12px;
+  color: #888;
+  text-transform: uppercase;
+}
+
+.login-view .pos-right {
+  text-align: right;
+}
+
+.login-view .pos-apy {
+  color: #10B981;
+  font-size: 13px;
+  font-weight: 700;
+  background: rgba(16, 185, 129, 0.15);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.login-view .pos-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  color: white;
+  margin-top: 6px;
+  display: block;
+}
+
+.login-view .act-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.login-view .act-item-login {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.login-view .act-item-login:last-child {
+  border: none;
+}
+
+.login-view .act-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.15);
+  color: #10B981;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+  font-size: 14px;
+}
+
+.login-view .act-info div:first-child {
+  font-size: 14px;
+  font-weight: 500;
+  color: white;
+}
+
+.login-view .act-info div:last-child {
+  font-size: 12px;
+  color: #888;
+}
+
+.login-view .act-val {
+  font-family: 'JetBrains Mono', monospace;
+  color: #10B981;
+  font-weight: 600;
+}
+
+/* MOBILE DEVICE */
+.login-view .device-mobile {
+  width: 280px;
+  height: 580px;
+  background: #000;
+  border: 8px solid #1a1a1a;
+  border-radius: 40px;
+  position: absolute;
+  bottom: -40px;
+  left: -50px;
+  box-shadow: 20px 30px 80px rgba(0, 0, 0, 0.8);
+  z-index: 10;
+  overflow: hidden;
+}
+
+.login-view .dynamic-island {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 80px;
+  height: 24px;
+  background: black;
+  border-radius: 20px;
+  z-index: 20;
+}
+
+.login-view .m-screen {
+  background: #050505;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding-top: 40px;
+}
+
+.login-view .m-header {
+  padding: 10px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.login-view .m-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: white;
+}
+
+.login-view .m-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.login-view .m-body::-webkit-scrollbar {
+  display: none;
+}
+
+.login-view .m-card {
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 20px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-view .m-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.login-view .m-asset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  color: white;
+  font-size: 16px;
+}
+
+.login-view .m-asset img {
+  width: 28px;
+}
+
+.login-view .m-badge {
+  font-size: 10px;
+  padding: 4px 8px;
+  background: #222;
+  border-radius: 6px;
+  color: #888;
+  text-transform: uppercase;
+}
+
+.login-view .m-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.login-view .m-stat label {
+  font-size: 10px;
+  color: #666;
+  display: block;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.login-view .m-stat span {
+  font-size: 14px;
+  font-weight: 700;
+  color: white;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.login-view .m-apy {
+  color: #10B981 !important;
+}
+
+.login-view .m-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.login-view .m-btn {
+  padding: 0;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 60px;
+}
+
+.login-view .m-btn i {
+  font-size: 18px;
+}
+
+.login-view .m-btn.fill {
+  background: #E85A04;
+  color: white;
+  border: none;
+}
+
+.login-view .m-btn.outline {
+  background: transparent;
+  border: 1px solid #333;
+  color: white;
+}

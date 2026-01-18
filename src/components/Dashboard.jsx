@@ -12,6 +12,7 @@ const SUPABASE_URL = 'https://ucrvaqztvfnphhoqcbpo.supabase.co/functions/v1';
 const VAULT_API_URL = `${SUPABASE_URL}/FIRECRAWL_DATA`;
 const REDEMPTION_API_URL = `${SUPABASE_URL}/REDEMPTION_API`;
 const WALLET_DATA_URL = `${SUPABASE_URL}/wallet-data`;
+const RECORD_TX_URL = `${SUPABASE_URL}/record-transaction`;
 
 // ========== REAL ENZYME VAULT CONFIGURATION ==========
 const ENZYME_VAULTS = {
@@ -139,6 +140,27 @@ function Dashboard({ address }) {
   const showNotification = (message, type = 'info') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 4000);
+  };
+
+  // ========== RECORD TRANSACTION INSTANTLY ==========
+  const recordTransaction = async (txData) => {
+    try {
+      const response = await fetch(RECORD_TX_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(txData)
+      });
+      const result = await response.json();
+      if (!result.ok && !result.duplicate) {
+        console.error('Failed to record transaction:', result.error);
+      } else {
+        console.log('Transaction recorded:', result);
+      }
+      return result;
+    } catch (err) {
+      console.error('Record transaction error:', err);
+      return { ok: false, error: err.message };
+    }
   };
 
   // ========== THEME EFFECT ==========
@@ -356,13 +378,32 @@ function Dashboard({ address }) {
       const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
       const depositTx = prepareContractCall({ contract: comptrollerContract, method: 'buyShares', params: [amount, 1n] });
       const depositResult = await sendTransaction({ transaction: depositTx, account });
-      await waitForReceipt({ client, chain: vault.chain, transactionHash: depositResult.transactionHash });
+      const receipt = await waitForReceipt({ client, chain: vault.chain, transactionHash: depositResult.transactionHash });
+
+      // RECORD TRANSACTION INSTANTLY
+      const depositAmountNum = parseFloat(depositAmount);
+      const sharePrice = vaultData[vaultKey]?.share_price || 1;
+      const estimatedShares = depositAmountNum / sharePrice;
+      
+      await recordTransaction({
+        wallet_address: address,
+        vault_id: vault.vaultId,
+        network: vault.network.toLowerCase(),
+        direction: 'DEPOSIT',
+        amount_usd: depositAmountNum,
+        tx_hash: depositResult.transactionHash,
+        block_number: receipt.blockNumber ? Number(receipt.blockNumber) : null,
+        shares_amount: estimatedShares
+      });
 
       showNotification(`Successfully deposited ${depositAmount} USDC!`, 'success');
       setDepositModal({ open: false, vault: 'arb' });
       setDepositAmount('');
+      
+      // Refresh data immediately
       fetchUserBalances();
       fetchWalletData();
+      fetchChartData();
     } catch (err) {
       console.error('Deposit error:', err);
       showNotification(err.message || 'Deposit failed', 'error');
@@ -432,15 +473,30 @@ function Dashboard({ address }) {
         params: [address, sharesAmount, [vault.denominationAsset], [10000n]]
       });
       const result = await sendTransaction({ transaction: redeemTx, account });
-      await waitForReceipt({ client, chain: vault.chain, transactionHash: result.transactionHash });
+      const receipt = await waitForReceipt({ client, chain: vault.chain, transactionHash: result.transactionHash });
+      
+      // RECORD WITHDRAWAL INSTANTLY
+      await recordTransaction({
+        wallet_address: address,
+        vault_id: vault.vaultId,
+        network: vault.network.toLowerCase(),
+        direction: 'WITHDRAW',
+        amount_usd: pending.estimated_usdc_value,
+        tx_hash: result.transactionHash,
+        block_number: receipt.blockNumber ? Number(receipt.blockNumber) : null,
+        shares_amount: pending.shares_amount
+      });
       
       await updateRedemptionStatus(pending.id, 'completed', result?.transactionHash);
       
       showNotification(`Successfully redeemed ${pending.shares_amount.toFixed(4)} shares!`, 'success');
       setRedeemModal({ open: false, vault: 'arb' });
       setPendingRedemptions(prev => ({ ...prev, [vaultKey]: null }));
+      
+      // Refresh data immediately
       fetchUserBalances();
       fetchWalletData();
+      fetchChartData();
     } catch (err) {
       console.error('Redeem error:', err);
       showNotification(err.message || 'Redemption failed', 'error');
