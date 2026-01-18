@@ -1848,13 +1848,13 @@
    LEFT SIDE (LIGHT GREY THEME)
    ========================================= */
 .login-view .login-left {
-  width: 40%;
-  min-width: 480px;
+  width: 32%;
+  min-width: 400px;
   background: #EBECEF;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 60px 80px;
+  padding: 50px 60px;
   position: relative;
   z-index: 20;
   box-shadow: 10px 0 40px rgba(0, 0, 0, 0.05);
@@ -1880,7 +1880,7 @@
 }
 
 .login-view .hero-text h1 {
-  font-size: 48px;
+  font-size: 42px;
   font-weight: 800;
   letter-spacing: -1.5px;
   line-height: 1.1;
@@ -1899,7 +1899,7 @@
 
 /* CONNECT BUTTON CONTAINER */
 .login-view .connect-container {
-  margin-bottom: 48px;
+  margin-bottom: 0;
 }
 
 /* Override thirdweb button to match design */
@@ -1928,25 +1928,6 @@
 .login-view .btn-get-started:hover {
   transform: translateY(-2px) !important;
   box-shadow: 0 15px 40px rgba(232, 90, 4, 0.35) !important;
-}
-
-/* TRUST ROW */
-.login-view .trust-row {
-  display: flex;
-  gap: 32px;
-  margin-top: 20px;
-}
-
-.login-view .trust-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  color: #555;
-}
-
-.login-view .trust-icon {
-  font-size: 18px;
 }
 
 /* =========================================
@@ -2034,6 +2015,9 @@
   }
   .login-view .login-right {
     display: none;
+  }
+  .login-view .hero-text h1 {
+    font-size: 36px;
   }
 }
 

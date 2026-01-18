@@ -73,21 +73,6 @@ function LoginView() {
             }}
           />
         </div>
-
-        <div className="trust-row">
-          <div className="trust-item">
-            <span className="trust-icon">🔒</span>
-            <span>Non-Custodial</span>
-          </div>
-          <div className="trust-item">
-            <span className="trust-icon">⚡</span>
-            <span>Instant Access</span>
-          </div>
-          <div className="trust-item">
-            <span className="trust-icon">🛡️</span>
-            <span>Audited</span>
-          </div>
-        </div>
       </div>
 
       {/* RIGHT SIDE - DARK THEME WITH MOCKUP */}
