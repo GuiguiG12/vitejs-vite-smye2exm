@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useDisconnect, useActiveWallet } from 'thirdweb/react';
-import { getContract, readContract, prepareContractCall, sendTransaction, waitForReceipt } from 'thirdweb';
+import { useDisconnect, useActiveWallet, useSwitchActiveWalletChain } from 'thirdweb/react';
+import { getContract, readContract, prepareContractCall, sendTransaction, waitForReceipt, estimateGas } from 'thirdweb';
 import { createThirdwebClient } from 'thirdweb';
 import { arbitrum, base } from 'thirdweb/chains';
 import { AreaChart, Area, Tooltip, ResponsiveContainer, XAxis, YAxis } from 'recharts';
@@ -61,12 +61,16 @@ const ERC20_ABI = [
 function Dashboard({ address }) {
   const { disconnect } = useDisconnect();
   const wallet = useActiveWallet();
+  const switchChain = useSwitchActiveWalletChain();
   
   // UI State
   const [activePanel, setActivePanel] = useState('overview');
   const [theme, setTheme] = useState('dark');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notification, setNotification] = useState(null);
+  const [networkDropdownOpen, setNetworkDropdownOpen] = useState(false);
+  const [depositGasEstimate, setDepositGasEstimate] = useState(null);
+  const [redeemGasEstimate, setRedeemGasEstimate] = useState(null);
   
   // Data State
   const [vaultData, setVaultData] = useState({ arb: null, base: null });
@@ -136,6 +140,89 @@ function Dashboard({ address }) {
   };
 
   const shortAddress = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '';
+  // Get current chain
+  const getCurrentChain = () => {
+    if (!wallet) return null;
+    const chain = wallet.getChain();
+    if (chain?.id === 42161) return 'arb';
+    if (chain?.id === 8453) return 'base';
+    return null;
+  };
+  const currentChainKey = getCurrentChain();
+  // Estimate gas for deposit
+  const estimateDepositGas = useCallback(async () => {
+    if (!depositAmount || parseFloat(depositAmount) <= 0 || !wallet) {
+      setDepositGasEstimate(null);
+      return;
+    }
+
+    try {
+      const vault = ENZYME_VAULTS[depositModal.vault];
+      const amount = BigInt(Math.floor(parseFloat(depositAmount) * 1e6));
+      const comptrollerAddr = comptrollerAddresses[depositModal.vault];
+      
+      if (!comptrollerAddr) return;
+
+      const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
+      const depositTx = prepareContractCall({ contract: comptrollerContract, method: 'buyShares', params: [amount, 1n] });
+      
+      const gas = await estimateGas({ transaction: depositTx });
+      const gasPriceGwei = vault.chain.id === 42161 ? 0.1 : 0.001;
+      const gasCostUsd = Number(gas) * gasPriceGwei * 0.000000001 * 3000;
+      
+      setDepositGasEstimate(gasCostUsd);
+    } catch (err) {
+      console.error('Gas estimation failed:', err);
+      setDepositGasEstimate(null);
+    }
+  }, [depositAmount, depositModal.vault, comptrollerAddresses, wallet]);
+
+  // Estimate gas for redeem
+  const estimateRedeemGas = useCallback(async () => {
+    if (!redeemAmount || parseFloat(redeemAmount) <= 0 || !wallet) {
+      setRedeemGasEstimate(null);
+      return;
+    }
+
+    try {
+      const vault = ENZYME_VAULTS[redeemModal.vault];
+      const sharesAmount = BigInt(Math.floor(parseFloat(redeemAmount) * 1e18));
+      const comptrollerAddr = comptrollerAddresses[redeemModal.vault];
+      
+      if (!comptrollerAddr) return;
+
+      const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
+      const redeemTx = prepareContractCall({
+        contract: comptrollerContract,
+        method: 'redeemSharesForSpecificAssets',
+        params: [address, sharesAmount, [vault.denominationAsset], [10000n]]
+      });
+      
+      const gas = await estimateGas({ transaction: redeemTx });
+      const gasPriceGwei = vault.chain.id === 42161 ? 0.1 : 0.001;
+      const gasCostUsd = Number(gas) * gasPriceGwei * 0.000000001 * 3000;
+      
+      setRedeemGasEstimate(gasCostUsd);
+    } catch (err) {
+      console.error('Gas estimation failed:', err);
+      setRedeemGasEstimate(null);
+    }
+  }, [redeemAmount, redeemModal.vault, comptrollerAddresses, wallet, address]);
+
+  // Run gas estimation when amounts change
+  useEffect(() => {
+    if (depositModal.open) {
+      estimateDepositGas();
+    }
+  }, [depositAmount, depositModal.open, estimateDepositGas]);
+
+  useEffect(() => {
+    if (redeemModal.open) {
+      estimateRedeemGas();
+    }
+  }, [redeemAmount, redeemModal.open, estimateRedeemGas]);
+
+
 
   const showNotification = (message, type = 'info') => {
     setNotification({ message, type });
@@ -353,6 +440,14 @@ function Dashboard({ address }) {
     setIsProcessing(true);
     try {
       const account = await wallet.getAccount();
+
+      // Check and switch network if needed
+      const currentChain = wallet.getChain();
+      if (currentChain?.id !== vault.chain.id) {
+        showNotification(`Switching to ${vault.network}...`, 'info');
+        await switchChain(vault.chain);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
       const amount = BigInt(Math.floor(parseFloat(depositAmount) * 1e6));
 
       if (userUsdcBalances[vaultKey] < amount) {
@@ -399,6 +494,7 @@ function Dashboard({ address }) {
       showNotification(`Successfully deposited ${depositAmount} USDC!`, 'success');
       setDepositModal({ open: false, vault: 'arb' });
       setDepositAmount('');
+      setDepositGasEstimate(null);
       
       // Refresh data immediately
       fetchUserBalances();
@@ -463,6 +559,14 @@ function Dashboard({ address }) {
     setIsProcessing(true);
     try {
       const account = await wallet.getAccount();
+
+      // Check and switch network if needed
+      const currentChain = wallet.getChain();
+      if (currentChain?.id !== vault.chain.id) {
+        showNotification(`Switching to ${vault.network}...`, 'info');
+        await switchChain(vault.chain);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
       const sharesAmount = BigInt(Math.floor(pending.shares_amount * 1e18));
       const comptrollerAddr = comptrollerAddresses[vaultKey];
       const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
@@ -593,6 +697,34 @@ function Dashboard({ address }) {
             <span>{activePanel === 'overview' ? 'Overview' : activePanel === 'buy-sell' ? 'Buy / Sell' : activePanel === 'transactions' ? 'Transactions' : 'Settings'}</span>
           </div>
           <div className="topbar-right">
+            {/* Network Indicator */}
+            <div className="network-indicator">
+              <button 
+                className={`network-badge ${currentChainKey || 'none'}`}
+                onClick={() => setNetworkDropdownOpen(!networkDropdownOpen)}
+              >
+                <div className="network-dot"></div>
+                <span>{currentChainKey === 'arb' ? 'Arbitrum' : currentChainKey === 'base' ? 'Base' : 'Connect'}</span>
+                <i className="ph ph-caret-down"></i>
+              </button>
+              
+              {networkDropdownOpen && (
+                <>
+                  <div className="network-overlay" onClick={() => setNetworkDropdownOpen(false)} />
+                  <div className="network-menu">
+                    <button onClick={async () => { await switchChain(arbitrum); setNetworkDropdownOpen(false); }}>
+                      <div className="network-dot arb"></div>
+                      Arbitrum
+                    </button>
+                    <button onClick={async () => { await switchChain(base); setNetworkDropdownOpen(false); }}>
+                      <div className="network-dot base"></div>
+                      Base
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
             <div className="refresh-btn" onClick={() => { loadData(); fetchWalletData(); fetchChartData(); }} title="Refresh Data">
               <i className="ph ph-arrows-clockwise"></i>
             </div>
@@ -668,14 +800,7 @@ function Dashboard({ address }) {
                             contentStyle={{ backgroundColor: 'var(--bg-root)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--text-main)' }}
                             itemStyle={{ color: 'var(--text-main)' }}
                             formatter={(value) => [fmtUsd(value), 'Portfolio Value']}
-                            labelFormatter={(label, payload) => {
-                              if (payload && payload[0] && payload[0].payload.timestamp) {
-                                const date = new Date(payload[0].payload.timestamp);
-                                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' at ' + 
-                                       date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-                              }
-                              return label;
-                            }}
+                            labelFormatter={(label) => label}
                           />
                           <Area
                             type="monotone"
@@ -710,7 +835,7 @@ function Dashboard({ address }) {
                     {walletSummary && (
                       <div style={{ textAlign: 'right' }}>
                         <div className="av-label">Net Invested</div>
-                        <div className="av-val mono">{fmtUsd(walletSummary.net_invested)}</div>
+                        <div className="av-val mono" style={{ fontSize: '16px' }}>{fmtUsd(walletSummary.net_invested)}</div>
                       </div>
                     )}
                   </div>
@@ -916,7 +1041,7 @@ function Dashboard({ address }) {
 
           {/* ========== TRANSACTIONS PANEL ========== */}
           {activePanel === 'transactions' && (
-            <div className="glass-card" style={{ padding: 0 }}>
+            <div className="glass-card table-wrapper">
               <table className="full-tx-table">
                 <thead>
                   <tr>
@@ -1106,6 +1231,11 @@ function Dashboard({ address }) {
                 </div>
                 <div className="input-helper">
                   Balance: {(Number(userUsdcBalances[depositModal.vault]) / 1e6).toFixed(2)} USDC
+                  {depositGasEstimate && (
+                    <span style={{ marginLeft: '12px', color: 'var(--text-muted)', fontSize: '12px' }}>
+                      • Est. gas: ~${depositGasEstimate.toFixed(2)}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

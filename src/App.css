@@ -922,37 +922,6 @@
      background: var(--bg-card-hover);
    }
    
-   /* ========== RESPONSIVE TRANSACTIONS TABLE ========== */
-   @media (max-width: 768px) {
-     .glass-card {
-       overflow-x: auto;
-       -webkit-overflow-scrolling: touch;
-     }
-   
-     .full-tx-table {
-       min-width: 650px;
-     }
-   
-     .full-tx-table th,
-     .full-tx-table td {
-       padding: 12px;
-       white-space: nowrap;
-     }
-   
-     .full-tx-table {
-       font-size: 13px;
-     }
-   
-     .tx-badge {
-       font-size: 11px;
-       padding: 4px 8px;
-     }
-   
-     .tx-link {
-       font-size: 12px;
-     }
-   }
-   
    /* ========== SETTINGS ========== */
    .settings-grid {
      display: grid;
@@ -2669,4 +2638,138 @@
   background: transparent;
   border: 1px solid #333;
   color: white;
+}
+/* ========== NETWORK INDICATOR ========== */
+.network-indicator {
+  position: relative;
+}
+
+.network-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text-main);
+  transition: all 0.2s;
+}
+
+.network-badge:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+}
+
+.network-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #888;
+}
+
+.network-badge.arb .network-dot {
+  background: #E85A04;
+}
+
+.network-badge.base .network-dot {
+  background: #0052FF;
+}
+
+.network-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+}
+
+.network-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+  min-width: 160px;
+  z-index: 50;
+  box-shadow: var(--shadow-card);
+  animation: slideDown 0.2s ease-out;
+}
+
+.network-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-main);
+  text-align: left;
+  transition: 0.2s;
+}
+
+.network-menu button:hover {
+  background: var(--bg-card);
+}
+
+.network-menu .network-dot.arb {
+  background: #E85A04;
+}
+
+.network-menu .network-dot.base {
+  background: #0052FF;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ========== TABLE RESPONSIVE FIX ========== */
+.table-wrapper {
+  padding: 0 !important;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 768px) {
+  .table-wrapper {
+    overflow-x: scroll;
+  }
+
+  .full-tx-table {
+    min-width: 700px;
+  }
+
+  .full-tx-table th,
+  .full-tx-table td {
+    padding: 12px;
+    white-space: nowrap;
+  }
+
+  .full-tx-table {
+    font-size: 13px;
+  }
+
+  .tx-badge {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+
+  .tx-link {
+    font-size: 12px;
+  }
 }
