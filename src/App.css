@@ -1400,6 +1400,458 @@
      font-size: 20px;
      cursor: pointer;
    }
+
+   /* =========================================================
+   G12 LABS - DASHBOARD IMPROVEMENTS CSS
+   Ajoutez ce code à votre App.css existant
+   ========================================================= */
+
+/* ========== NETWORK DROPDOWN ========== */
+.network-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  borderRadius: 8px;
+  cursor: pointer;
+  fontSize: 13px;
+  fontWeight: 500;
+  color: var(--text-main);
+  transition: all 0.2s;
+}
+
+.network-btn:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+}
+
+.network-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+  min-width: 160px;
+  z-index: 50;
+  box-shadow: var(--shadow-card);
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ========== PENDING TRANSACTIONS BANNER ========== */
+.pending-tx-banner {
+  margin: 20px 40px 0;
+  padding: 16px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--warning);
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ========== GAS ESTIMATION IN MODAL ========== */
+.input-helper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ========== IMPROVED COUNTDOWN DISPLAY ========== */
+.countdown-display {
+  padding: 20px;
+  background: var(--bg-root);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.countdown-label {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.countdown-value {
+  display: block;
+  font-size: 28px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-main);
+}
+
+/* ========== RESPONSIVE TRANSACTIONS TABLE ========== */
+@media (max-width: 768px) {
+  .full-tx-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+    border-radius: 16px;
+  }
+
+  .full-tx-table thead,
+  .full-tx-table tbody,
+  .full-tx-table tr {
+    display: block;
+  }
+
+  .full-tx-table thead {
+    display: none; /* Hide headers on mobile for cleaner card-based layout */
+  }
+
+  .full-tx-table tr {
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    background: var(--bg-card);
+  }
+
+  .full-tx-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0 !important;
+    border: none !important;
+  }
+
+  .full-tx-table td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* Alternative: Keep table format but make it scrollable */
+  .full-tx-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -20px; /* Negative margin to allow table to extend to edges */
+    padding: 0 20px;
+  }
+
+  .full-tx-table {
+    min-width: 600px; /* Ensure table doesn't shrink too much */
+  }
+}
+
+/* Better approach: Scrollable table on mobile */
+@media (max-width: 768px) {
+  /* Override the previous mobile styles */
+  .full-tx-table thead,
+  .full-tx-table tbody,
+  .full-tx-table tr {
+    display: table-row;
+  }
+
+  .full-tx-table thead {
+    display: table-header-group;
+  }
+
+  .full-tx-table td {
+    display: table-cell;
+  }
+
+  .full-tx-table td::before {
+    content: none;
+  }
+
+  /* Make the glass-card container handle scrolling */
+  .glass-card[style*="padding: 0"] {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .full-tx-table {
+    min-width: 650px;
+  }
+
+  .full-tx-table th,
+  .full-tx-table td {
+    padding: 12px 16px;
+    white-space: nowrap;
+  }
+
+  /* Reduce font sizes slightly on mobile */
+  .full-tx-table {
+    font-size: 13px;
+  }
+
+  .tx-badge {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+}
+
+/* ========== MOBILE MENU IMPROVEMENTS ========== */
+@media (max-width: 768px) {
+  .mobile-menu-btn {
+    display: block;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    color: var(--text-main);
+  }
+
+  .topbar {
+    padding: 0 20px;
+  }
+
+  .content-wrapper {
+    padding: 20px;
+  }
+
+  .breadcrumbs {
+    font-size: 13px;
+  }
+
+  /* Stack topbar-right items vertically on very small screens */
+  @media (max-width: 480px) {
+    .topbar-right {
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .network-btn {
+      font-size: 12px;
+      padding: 4px 8px;
+    }
+
+    .wallet-capsule {
+      padding: 4px 8px 4px 4px;
+    }
+
+    .wallet-addr {
+      font-size: 11px;
+    }
+  }
+}
+
+/* ========== NOTIFICATION IMPROVEMENTS ========== */
+.notification {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  margin: 20px 40px 0;
+  border-radius: 12px;
+  font-size: 14px;
+  animation: slideDown 0.3s ease-out;
+  max-width: 600px;
+  box-shadow: var(--shadow-card);
+}
+
+.notification a {
+  color: inherit;
+  text-decoration: underline;
+  font-weight: 500;
+}
+
+.notification a:hover {
+  opacity: 0.8;
+}
+
+@media (max-width: 768px) {
+  .notification {
+    margin: 20px 20px 0;
+    font-size: 13px;
+    padding: 12px 16px;
+  }
+
+  .pending-tx-banner {
+    margin: 20px 20px 0;
+    padding: 12px;
+    font-size: 13px;
+  }
+}
+
+/* ========== LOADING SKELETON ========== */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-card) 0%,
+    rgba(255, 255, 255, 0.05) 50%,
+    var(--bg-card) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+/* ========== VAULT CARD IMPROVEMENTS ========== */
+.pending-banner {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.pending-banner.waiting {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid var(--warning);
+}
+
+.pending-banner.ready {
+  background: var(--success-bg);
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+
+/* ========== EMPTY STATES ========== */
+.empty-state {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty-state i {
+  font-size: 48px;
+  opacity: 0.3;
+  margin-bottom: 16px;
+  display: block;
+}
+
+.empty-state h3 {
+  font-size: 18px;
+  color: var(--text-main);
+  margin-bottom: 8px;
+}
+
+.empty-state p {
+  font-size: 14px;
+  max-width: 400px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+/* ========== MODAL IMPROVEMENTS ========== */
+.info-callout.warning {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.info-callout.warning i {
+  font-size: 20px;
+  color: var(--warning);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.info-callout.warning strong {
+  display: block;
+  color: var(--text-main);
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.info-callout.warning p {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ========== SETTINGS PAGE IMPROVEMENTS ========== */
+.setting-value.mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ========== UTILITY CLASSES ========== */
+.positive {
+  color: var(--success) !important;
+}
+
+.negative {
+  color: var(--error) !important;
+}
+
+/* ========== ACCESSIBILITY ========== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ========== PRINT STYLES ========== */
+@media print {
+  .sidebar,
+  .topbar,
+  .mobile-menu-btn,
+  .notification,
+  .pending-tx-banner,
+  .modal-overlay,
+  .btn {
+    display: none !important;
+  }
+
+  .main-content {
+    margin-left: 0;
+  }
+
+  .glass-card {
+    background: white;
+    border: 1px solid #ddd;
+    box-shadow: none;
+  }
+}
    
    /* ========== LOGIN VIEW ========== */
    .login-view {

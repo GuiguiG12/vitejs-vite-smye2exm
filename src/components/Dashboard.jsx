@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useDisconnect, useActiveWallet } from 'thirdweb/react';
-import { getContract, readContract, prepareContractCall, sendTransaction, waitForReceipt } from 'thirdweb';
+import { useDisconnect, useActiveWallet, useSwitchActiveWalletChain } from 'thirdweb/react';
+import { getContract, readContract, prepareContractCall, sendTransaction, waitForReceipt, estimateGas } from 'thirdweb';
 import { createThirdwebClient } from 'thirdweb';
 import { arbitrum, base } from 'thirdweb/chains';
 import { AreaChart, Area, Tooltip, ResponsiveContainer, XAxis, YAxis } from 'recharts';
@@ -61,12 +61,14 @@ const ERC20_ABI = [
 function Dashboard({ address }) {
   const { disconnect } = useDisconnect();
   const wallet = useActiveWallet();
+  const switchChain = useSwitchActiveWalletChain();
   
   // UI State
   const [activePanel, setActivePanel] = useState('overview');
   const [theme, setTheme] = useState('dark');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notification, setNotification] = useState(null);
+  const [networkDropdownOpen, setNetworkDropdownOpen] = useState(false);
   
   // Data State
   const [vaultData, setVaultData] = useState({ arb: null, base: null });
@@ -90,11 +92,26 @@ function Dashboard({ address }) {
   const [depositAmount, setDepositAmount] = useState('');
   const [redeemAmount, setRedeemAmount] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [gasEstimate, setGasEstimate] = useState(null);
 
   // Redemption Cooldown State (72h)
   const [pendingRedemptions, setPendingRedemptions] = useState({ arb: null, base: null });
   const [countdowns, setCountdowns] = useState({ arb: null, base: null });
   const [cooldownSeconds, setCooldownSeconds] = useState(259200);
+
+  // NEW: Pending transactions tracking
+  const [pendingTxs, setPendingTxs] = useState([]);
+
+  // ========== GET CURRENT CHAIN ==========
+  const getCurrentChain = () => {
+    if (!wallet) return null;
+    const chain = wallet.getChain();
+    if (chain?.id === arbitrum.id) return 'arb';
+    if (chain?.id === base.id) return 'base';
+    return null;
+  };
+
+  const currentChainKey = getCurrentChain();
 
   // ========== FORMAT HELPERS ==========
   const fmtUsd = (v) => {
@@ -137,10 +154,89 @@ function Dashboard({ address }) {
 
   const shortAddress = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '';
 
-  const showNotification = (message, type = 'info') => {
-    setNotification({ message, type });
-    setTimeout(() => setNotification(null), 4000);
+  const showNotification = (message, type = 'info', txHash = null, network = null) => {
+    setNotification({ message, type, txHash, network });
+    if (type !== 'error') {
+      setTimeout(() => setNotification(null), 5000);
+    }
   };
+
+  // ========== PENDING TX MANAGEMENT ==========
+  useEffect(() => {
+    const stored = localStorage.getItem('g12_pending_txs');
+    if (stored) {
+      const txs = JSON.parse(stored);
+      // Filter out old txs (> 24h)
+      const recent = txs.filter(tx => Date.now() - tx.timestamp < 86400000);
+      setPendingTxs(recent);
+      localStorage.setItem('g12_pending_txs', JSON.stringify(recent));
+    }
+  }, []);
+
+  const addPendingTx = (txHash, vault, type, amount) => {
+    const newTx = {
+      txHash,
+      vault,
+      type,
+      amount,
+      timestamp: Date.now()
+    };
+    const updated = [...pendingTxs, newTx];
+    setPendingTxs(updated);
+    localStorage.setItem('g12_pending_txs', JSON.stringify(updated));
+  };
+
+  const removePendingTx = (txHash) => {
+    const updated = pendingTxs.filter(tx => tx.txHash !== txHash);
+    setPendingTxs(updated);
+    localStorage.setItem('g12_pending_txs', JSON.stringify(updated));
+  };
+
+  // Check if pending txs appear in transactions list
+  useEffect(() => {
+    if (transactions.length > 0 && pendingTxs.length > 0) {
+      const txHashes = transactions.map(tx => tx.tx_hash.toLowerCase());
+      pendingTxs.forEach(ptx => {
+        if (txHashes.includes(ptx.txHash.toLowerCase())) {
+          removePendingTx(ptx.txHash);
+        }
+      });
+    }
+  }, [transactions, pendingTxs]);
+
+  // ========== GAS ESTIMATION ==========
+  const estimateDepositGas = useCallback(async () => {
+    if (!depositAmount || parseFloat(depositAmount) <= 0 || !wallet) {
+      setGasEstimate(null);
+      return;
+    }
+
+    try {
+      const vault = ENZYME_VAULTS[depositModal.vault];
+      const amount = BigInt(Math.floor(parseFloat(depositAmount) * 1e6));
+      const comptrollerAddr = comptrollerAddresses[depositModal.vault];
+      
+      if (!comptrollerAddr) return;
+
+      const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
+      const depositTx = prepareContractCall({ contract: comptrollerContract, method: 'buyShares', params: [amount, 1n] });
+      
+      const gas = await estimateGas({ transaction: depositTx });
+      const gasPriceGwei = vault.chain.id === arbitrum.id ? 0.1 : 0.001; // Rough estimates
+      const gasCostUsd = Number(gas) * gasPriceGwei * 0.000000001 * 3000; // Assuming $3000 ETH
+      
+      setGasEstimate(gasCostUsd);
+    } catch (err) {
+      console.error('Gas estimation failed:', err);
+      setGasEstimate(null);
+    }
+  }, [depositAmount, depositModal.vault, comptrollerAddresses, wallet]);
+
+  useEffect(() => {
+    if (depositModal.open) {
+      estimateDepositGas();
+    }
+  }, [depositAmount, depositModal.open, estimateDepositGas]);
 
   // ========== RECORD TRANSACTION INSTANTLY ==========
   const recordTransaction = async (txData) => {
@@ -171,170 +267,133 @@ function Dashboard({ address }) {
   // ========== FETCH WALLET DATA FROM SUPABASE ==========
   const fetchWalletData = useCallback(async () => {
     if (!address) return;
-    
     try {
-      // Fetch summary (P&L, positions)
-      const summaryRes = await fetch(`${WALLET_DATA_URL}?action=summary&wallet=${address}`);
-      const summaryData = await summaryRes.json();
-      if (summaryData.ok) {
-        setWalletSummary(summaryData);
-      }
-
-      // Fetch transactions
-      const txRes = await fetch(`${WALLET_DATA_URL}?action=transactions&wallet=${address}&limit=50`);
-      const txData = await txRes.json();
-      if (txData.ok) {
-        setTransactions(txData.transactions || []);
+      const res = await fetch(`${WALLET_DATA_URL}?action=summary&wallet=${address}`);
+      const data = await res.json();
+      if (data.summary) {
+        setWalletSummary(data.summary);
       }
     } catch (err) {
-      console.error('Failed to fetch wallet data:', err);
+      console.error('Failed to fetch wallet summary:', err);
     }
   }, [address]);
 
-  // Fetch chart data based on range
+  const fetchTransactions = useCallback(async () => {
+    if (!address) return;
+    try {
+      const res = await fetch(`${WALLET_DATA_URL}?action=transactions&wallet=${address}&limit=50`);
+      const data = await res.json();
+      if (data.transactions) {
+        setTransactions(data.transactions);
+      }
+    } catch (err) {
+      console.error('Failed to fetch transactions:', err);
+    }
+  }, [address]);
+
   const fetchChartData = useCallback(async () => {
     if (!address) return;
-    
     try {
-      const chartRes = await fetch(`${WALLET_DATA_URL}?action=chart&wallet=${address}&range=${chartRange}`);
-      const chartData = await chartRes.json();
-      if (chartData.ok && chartData.points) {
-        const formatted = chartData.points.map(p => ({
+      const res = await fetch(`${WALLET_DATA_URL}?action=chart&wallet=${address}&range=${chartRange}`);
+      const data = await res.json();
+      if (data.points) {
+        const formatted = data.points.map(p => ({
           date: new Date(p.t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          timestamp: new Date(p.t).getTime(),
           value: p.v
         }));
         setPortfolioChart(formatted);
-      }
-
-      // Fetch P&L for current range
-      const pnlRes = await fetch(`${WALLET_DATA_URL}?action=pnl&wallet=${address}&range=${chartRange}`);
-      const pnlResult = await pnlRes.json();
-      if (pnlResult.ok) {
-        setPnlData(pnlResult);
       }
     } catch (err) {
       console.error('Failed to fetch chart data:', err);
     }
   }, [address, chartRange]);
 
-  // ========== REDEMPTION API FUNCTIONS ==========
-  const fetchPendingRedemptions = useCallback(async () => {
+  const fetchPnlData = useCallback(async () => {
     if (!address) return;
     try {
-      const res = await fetch(`${REDEMPTION_API_URL}?action=pending&wallet=${address}`);
+      const res = await fetch(`${WALLET_DATA_URL}?action=pnl&wallet=${address}&range=${chartRange}`);
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      if (data.cooldown_seconds) setCooldownSeconds(data.cooldown_seconds);
-      const pending = { arb: null, base: null };
-      for (const req of data.pending || []) {
-        pending[req.vault] = req;
+      if (data.pnl_usd !== undefined) {
+        setPnlData(data);
       }
-      setPendingRedemptions(pending);
     } catch (err) {
-      console.error('Failed to fetch pending redemptions:', err);
+      console.error('Failed to fetch PnL data:', err);
     }
-  }, [address]);
+  }, [address, chartRange]);
 
-  const createRedemptionRequest = async (vault, sharesAmount, estimatedUsdc) => {
-    const res = await fetch(`${REDEMPTION_API_URL}?action=create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wallet_address: address, vault, shares_amount: sharesAmount, estimated_usdc_value: estimatedUsdc })
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data.request;
-  };
+  useEffect(() => {
+    if (address) {
+      fetchWalletData();
+      fetchTransactions();
+      fetchChartData();
+      fetchPnlData();
+    }
+  }, [address, fetchWalletData, fetchTransactions, fetchChartData, fetchPnlData]);
 
-  const updateRedemptionStatus = async (id, status, txHash = null) => {
-    const res = await fetch(`${REDEMPTION_API_URL}?action=update`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, status, tx_hash: txHash })
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data.request;
-  };
+  useEffect(() => {
+    fetchChartData();
+    fetchPnlData();
+  }, [chartRange, fetchChartData, fetchPnlData]);
 
-  // ========== DATA FETCHING ==========
-  const loadData = useCallback(async () => {
+  // ========== FETCH VAULT DATA ==========
+  const fetchVaults = useCallback(async () => {
     setLoading(true);
     try {
       const [arbRes, baseRes] = await Promise.all([
         fetch(`${VAULT_API_URL}?action=get&network=arbitrum`),
-        fetch(`${VAULT_API_URL}?action=get&network=base`),
+        fetch(`${VAULT_API_URL}?action=get&network=base`)
       ]);
-      const [arbData, baseData] = await Promise.all([
-        arbRes.json(), baseRes.json()
-      ]);
-      setVaultData({ arb: arbData, base: baseData });
+      
+      const arbData = await arbRes.json();
+      const baseData = await baseRes.json();
+      
+      setVaultData({ arb: arbData.vault || null, base: baseData.vault || null });
     } catch (err) {
       console.error('Failed to fetch vault data:', err);
+      showNotification('Failed to load vault data', 'error');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
-  // Fetch user balances from blockchain
-  const fetchUserBalances = useCallback(async () => {
-    if (!address) return;
+  useEffect(() => {
+    fetchVaults();
+    const interval = setInterval(fetchVaults, 30000);
+    return () => clearInterval(interval);
+  }, [fetchVaults]);
 
-    for (const [key, vault] of Object.entries(ENZYME_VAULTS)) {
-      if (!vault.vaultProxy) continue;
-      try {
+  // ========== FETCH USER BALANCES FROM BLOCKCHAIN ==========
+  const fetchUserBalances = useCallback(async () => {
+    if (!wallet || !address) return;
+    try {
+      const account = await wallet.getAccount();
+      
+      for (const [key, vault] of Object.entries(ENZYME_VAULTS)) {
+        // Fetch vault shares
         const vaultContract = getContract({ client, chain: vault.chain, address: vault.vaultProxy, abi: VAULT_ABI });
-        const shareBalance = await readContract({ contract: vaultContract, method: 'balanceOf', params: [address] });
-        const comptroller = await readContract({ contract: vaultContract, method: 'getAccessor', params: [] });
+        const sharesBalance = await readContract({ contract: vaultContract, method: 'balanceOf', params: [address] });
         
+        // Fetch USDC balance
         const usdcContract = getContract({ client, chain: vault.chain, address: vault.denominationAsset, abi: ERC20_ABI });
         const usdcBalance = await readContract({ contract: usdcContract, method: 'balanceOf', params: [address] });
-
-        setUserVaultBalances(prev => ({ ...prev, [key]: shareBalance }));
+        
+        // Fetch comptroller address
+        const comptroller = await readContract({ contract: vaultContract, method: 'getAccessor', params: [] });
+        
+        setUserVaultBalances(prev => ({ ...prev, [key]: sharesBalance }));
         setUserUsdcBalances(prev => ({ ...prev, [key]: usdcBalance }));
         setComptrollerAddresses(prev => ({ ...prev, [key]: comptroller }));
-      } catch (err) {
-        console.error(`Failed to fetch ${key} balances:`, err);
       }
+    } catch (err) {
+      console.error('Failed to fetch user balances:', err);
     }
-  }, [address]);
+  }, [wallet, address]);
 
-  useEffect(() => { loadData(); }, [loadData]);
-  useEffect(() => { fetchUserBalances(); }, [fetchUserBalances]);
-  useEffect(() => { fetchPendingRedemptions(); }, [fetchPendingRedemptions]);
-  useEffect(() => { fetchWalletData(); }, [fetchWalletData]);
-  useEffect(() => { fetchChartData(); }, [fetchChartData]);
-
-  // Countdown timer
   useEffect(() => {
-    const interval = setInterval(() => {
-      const newCountdowns = { arb: null, base: null };
-      for (const vault of ['arb', 'base']) {
-        const pending = pendingRedemptions[vault];
-        if (pending) {
-          const remaining = new Date(pending.unlock_at).getTime() - Date.now();
-          newCountdowns[vault] = remaining > 0 ? remaining : 0;
-        }
-      }
-      setCountdowns(newCountdowns);
-    }, 1000);
+    fetchUserBalances();
+    const interval = setInterval(fetchUserBalances, 15000);
     return () => clearInterval(interval);
-  }, [pendingRedemptions]);
-
-  // ========== COMPUTED VALUES ==========
-  const getUserVaultValue = (vaultKey) => {
-    const shares = Number(userVaultBalances[vaultKey]) / 1e18;
-    const sharePrice = vaultData[vaultKey]?.share_price || 1;
-    return shares * sharePrice;
-  };
-
-  // Use walletSummary if available, otherwise calculate from blockchain
-  const totalBalance = walletSummary?.current_value ?? (getUserVaultValue('arb') + getUserVaultValue('base'));
-  const walletUsdc = (Number(userUsdcBalances.arb) + Number(userUsdcBalances.base)) / 1e6;
-  
-  // P&L values
-  const pnlUsd = pnlData?.pnl_usd ?? walletSummary?.pnl_usd ?? 0;
-  const pnlPercent = pnlData?.pnl_percent ?? walletSummary?.pnl_percent ?? 0;
+  }, [fetchUserBalances]);
 
   // ========== DEPOSIT FUNCTION ==========
   const handleDeposit = async () => {
@@ -353,6 +412,15 @@ function Dashboard({ address }) {
     setIsProcessing(true);
     try {
       const account = await wallet.getAccount();
+      
+      // Check and switch network if needed
+      const currentChain = wallet.getChain();
+      if (currentChain?.id !== vault.chain.id) {
+        showNotification(`Switching to ${vault.network}...`, 'info');
+        await switchChain(vault.chain);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for network switch
+      }
+      
       const amount = BigInt(Math.floor(parseFloat(depositAmount) * 1e6));
 
       if (userUsdcBalances[vaultKey] < amount) {
@@ -380,6 +448,9 @@ function Dashboard({ address }) {
       const depositResult = await sendTransaction({ transaction: depositTx, account });
       const receipt = await waitForReceipt({ client, chain: vault.chain, transactionHash: depositResult.transactionHash });
 
+      // Add to pending txs
+      addPendingTx(depositResult.transactionHash, vault.name, 'DEPOSIT', parseFloat(depositAmount));
+
       // RECORD TRANSACTION INSTANTLY
       const depositAmountNum = parseFloat(depositAmount);
       const sharePrice = vaultData[vaultKey]?.share_price || 1;
@@ -396,9 +467,10 @@ function Dashboard({ address }) {
         shares_amount: estimatedShares
       });
 
-      showNotification(`Successfully deposited ${depositAmount} USDC!`, 'success');
+      showNotification(`Successfully deposited ${depositAmount} USDC!`, 'success', depositResult.transactionHash, vault.network.toLowerCase());
       setDepositModal({ open: false, vault: 'arb' });
       setDepositAmount('');
+      setGasEstimate(null);
       
       // Refresh data immediately
       fetchUserBalances();
@@ -413,6 +485,52 @@ function Dashboard({ address }) {
   };
 
   // ========== REDEMPTION FUNCTIONS ==========
+  const fetchPendingRedemptions = useCallback(async () => {
+    if (!address) return;
+    try {
+      for (const [key, vault] of Object.entries(ENZYME_VAULTS)) {
+        const res = await fetch(`${REDEMPTION_API_URL}?action=pending&wallet=${address}&vault=${vault.vaultId}`);
+        const data = await res.json();
+        if (data.redemptions && data.redemptions.length > 0) {
+          setPendingRedemptions(prev => ({ ...prev, [key]: data.redemptions[0] }));
+        } else {
+          setPendingRedemptions(prev => ({ ...prev, [key]: null }));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch pending redemptions:', err);
+    }
+  }, [address]);
+
+  useEffect(() => {
+    fetchPendingRedemptions();
+    const interval = setInterval(fetchPendingRedemptions, 10000);
+    return () => clearInterval(interval);
+  }, [fetchPendingRedemptions]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const newCountdowns = {};
+      for (const [key, redemption] of Object.entries(pendingRedemptions)) {
+        if (redemption) {
+          const unlockTime = new Date(redemption.unlock_at).getTime();
+          const remaining = unlockTime - Date.now();
+          newCountdowns[key] = remaining;
+        } else {
+          newCountdowns[key] = null;
+        }
+      }
+      setCountdowns(newCountdowns);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [pendingRedemptions]);
+
+  const hasPendingRedemption = (vaultKey) => !!pendingRedemptions[vaultKey];
+  const isRedemptionReady = (vaultKey) => {
+    if (!pendingRedemptions[vaultKey]) return false;
+    return countdowns[vaultKey] !== null && countdowns[vaultKey] <= 0;
+  };
+
   const handleRedemptionRequest = async () => {
     const vaultKey = redeemModal.vault;
     const vault = ENZYME_VAULTS[vaultKey];
@@ -438,10 +556,30 @@ function Dashboard({ address }) {
     try {
       const sharePrice = vaultData[vaultKey]?.share_price || 1;
       const estimatedUsdc = sharesAmount * sharePrice;
-      const request = await createRedemptionRequest(vaultKey, sharesAmount, estimatedUsdc);
-      setPendingRedemptions(prev => ({ ...prev, [vaultKey]: request }));
-      showNotification(`Redemption request submitted! Withdrawal available in ${formatCooldownDisplay()}`, 'success');
-      setRedeemAmount('');
+
+      const payload = {
+        wallet_address: address,
+        vault: vault.vaultId,
+        shares_amount: sharesAmount,
+        estimated_usdc_value: estimatedUsdc
+      };
+
+      const res = await fetch(`${REDEMPTION_API_URL}?action=create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      
+      if (data.ok) {
+        showNotification(`Redemption request submitted! Wait ${formatCooldownDisplay()} to complete.`, 'success');
+        fetchPendingRedemptions();
+        setRedeemModal({ open: false, vault: 'arb' });
+        setRedeemAmount('');
+      } else {
+        showNotification(data.error || 'Failed to create redemption request', 'error');
+      }
     } catch (err) {
       console.error('Redemption request error:', err);
       showNotification(err.message || 'Failed to submit request', 'error');
@@ -450,152 +588,308 @@ function Dashboard({ address }) {
     }
   };
 
+  const cancelRedemption = async (vaultKey) => {
+    const redemption = pendingRedemptions[vaultKey];
+    if (!redemption) return;
+
+    try {
+      const res = await fetch(`${REDEMPTION_API_URL}?action=update`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: redemption.id, status: 'cancelled' })
+      });
+      
+      const data = await res.json();
+      if (data.ok) {
+        showNotification('Redemption request cancelled', 'info');
+        fetchPendingRedemptions();
+        setRedeemModal({ open: false, vault: 'arb' });
+      }
+    } catch (err) {
+      console.error('Cancel redemption error:', err);
+      showNotification('Failed to cancel request', 'error');
+    }
+  };
+
   const executeRedemption = async () => {
     const vaultKey = redeemModal.vault;
     const vault = ENZYME_VAULTS[vaultKey];
-    const pending = pendingRedemptions[vaultKey];
+    const redemption = pendingRedemptions[vaultKey];
     
-    if (!pending || countdowns[vaultKey] > 0) {
-      showNotification('Please wait for the cooldown to expire', 'error');
+    if (!redemption || !isRedemptionReady(vaultKey)) {
+      showNotification('Redemption not ready yet', 'error');
       return;
     }
 
     setIsProcessing(true);
     try {
       const account = await wallet.getAccount();
-      const sharesAmount = BigInt(Math.floor(pending.shares_amount * 1e18));
-      const comptrollerAddr = comptrollerAddresses[vaultKey];
-      const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
       
+      // Check and switch network if needed
+      const currentChain = wallet.getChain();
+      if (currentChain?.id !== vault.chain.id) {
+        showNotification(`Switching to ${vault.network}...`, 'info');
+        await switchChain(vault.chain);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      const sharesAmount = BigInt(Math.floor(redemption.shares_amount * 1e18));
+      const comptrollerAddr = comptrollerAddresses[vaultKey];
+
+      if (!comptrollerAddr) {
+        showNotification('Could not find vault comptroller', 'error');
+        setIsProcessing(false);
+        return;
+      }
+
+      showNotification('Processing withdrawal...', 'info');
+      const comptrollerContract = getContract({ client, chain: vault.chain, address: comptrollerAddr, abi: COMPTROLLER_ABI });
       const redeemTx = prepareContractCall({
         contract: comptrollerContract,
         method: 'redeemSharesForSpecificAssets',
         params: [address, sharesAmount, [vault.denominationAsset], [10000n]]
       });
-      const result = await sendTransaction({ transaction: redeemTx, account });
-      const receipt = await waitForReceipt({ client, chain: vault.chain, transactionHash: result.transactionHash });
-      
-      // RECORD WITHDRAWAL INSTANTLY
+
+      const redeemResult = await sendTransaction({ transaction: redeemTx, account });
+      const receipt = await waitForReceipt({ client, chain: vault.chain, transactionHash: redeemResult.transactionHash });
+
+      // Add to pending txs
+      addPendingTx(redeemResult.transactionHash, vault.name, 'WITHDRAW', redemption.estimated_usdc_value);
+
+      // Update redemption status
+      await fetch(`${REDEMPTION_API_URL}?action=update`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          id: redemption.id, 
+          status: 'completed',
+          tx_hash: redeemResult.transactionHash
+        })
+      });
+
+      // Record transaction
       await recordTransaction({
         wallet_address: address,
         vault_id: vault.vaultId,
         network: vault.network.toLowerCase(),
         direction: 'WITHDRAW',
-        amount_usd: pending.estimated_usdc_value,
-        tx_hash: result.transactionHash,
+        amount_usd: redemption.estimated_usdc_value,
+        tx_hash: redeemResult.transactionHash,
         block_number: receipt.blockNumber ? Number(receipt.blockNumber) : null,
-        shares_amount: pending.shares_amount
+        shares_amount: redemption.shares_amount
       });
-      
-      await updateRedemptionStatus(pending.id, 'completed', result?.transactionHash);
-      
-      showNotification(`Successfully redeemed ${pending.shares_amount.toFixed(4)} shares!`, 'success');
+
+      showNotification('Withdrawal successful!', 'success', redeemResult.transactionHash, vault.network.toLowerCase());
+      fetchPendingRedemptions();
       setRedeemModal({ open: false, vault: 'arb' });
-      setPendingRedemptions(prev => ({ ...prev, [vaultKey]: null }));
       
-      // Refresh data immediately
+      // Refresh balances
       fetchUserBalances();
       fetchWalletData();
       fetchChartData();
     } catch (err) {
-      console.error('Redeem error:', err);
-      showNotification(err.message || 'Redemption failed', 'error');
+      console.error('Execute redemption error:', err);
+      showNotification(err.message || 'Withdrawal failed', 'error');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const cancelRedemption = async (vaultKey) => {
-    const pending = pendingRedemptions[vaultKey];
-    if (!pending) return;
-    try {
-      await updateRedemptionStatus(pending.id, 'cancelled');
-      setPendingRedemptions(prev => ({ ...prev, [vaultKey]: null }));
-      showNotification('Redemption request cancelled', 'info');
-    } catch (err) {
-      showNotification('Failed to cancel request', 'error');
-    }
+  const handleLogout = () => {
+    disconnect();
   };
 
-  const handleLogout = async () => {
-    if (wallet) await disconnect(wallet);
-  };
+  // ========== COMPUTED VALUES ==========
+  const totalBalance = walletSummary?.current_value || 0;
+  const walletUsdc = Number(userUsdcBalances.arb) / 1e6 + Number(userUsdcBalances.base) / 1e6;
+  const pnlUsd = pnlData?.pnl_usd || 0;
+  const pnlPercent = pnlData?.pnl_percent || 0;
 
-  const hasPendingRedemption = (vaultKey) => !!pendingRedemptions[vaultKey];
-  const isRedemptionReady = (vaultKey) => hasPendingRedemption(vaultKey) && countdowns[vaultKey] === 0;
+  // ========== LOADING SKELETON COMPONENT ==========
+  const Skeleton = ({ width = '100%', height = '20px' }) => (
+    <div style={{ 
+      width, 
+      height, 
+      background: 'linear-gradient(90deg, var(--bg-card) 0%, rgba(255,255,255,0.05) 50%, var(--bg-card) 100%)',
+      backgroundSize: '200% 100%',
+      animation: 'shimmer 1.5s infinite',
+      borderRadius: '4px'
+    }} />
+  );
 
-  // ========== RENDER ==========
   return (
-    <div className="dashboard-layout">
-      {/* SIDEBAR */}
+    <div className="dashboard-layout" data-theme={theme}>
+      {/* Sidebar */}
       <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
-          <a href="/" className="logo-container">
-            <img src="/logo_g12.svg" alt="G12" height="28" />
+          <div className="logo-container">
+            <img src="/logo_g12.svg" alt="G12 Labs" />
             <span className="logo-text">G12 LABS</span>
-          </a>
+          </div>
         </div>
 
-        <div className="nav-section">
+        <nav className="nav-section">
           <div className="nav-label">Main Menu</div>
           <div className={`nav-item ${activePanel === 'overview' ? 'active' : ''}`} onClick={() => { setActivePanel('overview'); setMobileMenuOpen(false); }}>
-            <i className="ph ph-squares-four"></i> Dashboard
+            <i className="ph ph-squares-four"></i>
+            <span>Dashboard</span>
           </div>
           <div className={`nav-item ${activePanel === 'buy-sell' ? 'active' : ''}`} onClick={() => { setActivePanel('buy-sell'); setMobileMenuOpen(false); }}>
-            <i className="ph ph-arrows-left-right"></i> Buy / Sell
+            <i className="ph ph-arrows-left-right"></i>
+            <span>Buy / Sell</span>
           </div>
           <div className={`nav-item ${activePanel === 'transactions' ? 'active' : ''}`} onClick={() => { setActivePanel('transactions'); setMobileMenuOpen(false); }}>
-            <i className="ph ph-list-dashes"></i> Transactions
+            <i className="ph ph-list-dashes"></i>
+            <span>Transactions</span>
           </div>
-        </div>
+        </nav>
 
-        <div className="nav-section">
-          <div className="nav-label">Analytics</div>
-          <a href="/strategies.html" className="nav-item">
-            <i className="ph ph-chart-line-up"></i> Strategies
-          </a>
-        </div>
-
-        <div className="nav-section">
+        <nav className="nav-section">
           <div className="nav-label">Account</div>
           <div className={`nav-item ${activePanel === 'settings' ? 'active' : ''}`} onClick={() => { setActivePanel('settings'); setMobileMenuOpen(false); }}>
-            <i className="ph ph-gear"></i> Settings
+            <i className="ph ph-gear"></i>
+            <span>Settings</span>
           </div>
-        </div>
+        </nav>
 
         <div className="sidebar-footer">
-          <div className="disconnect-btn" onClick={handleLogout}>
-            <i className="ph ph-sign-out"></i> Disconnect
-          </div>
+          <button className="disconnect-btn" onClick={handleLogout}>
+            <i className="ph ph-sign-out"></i>
+            <span>Disconnect</span>
+          </button>
         </div>
       </aside>
 
-      {/* Mobile Overlay */}
-      {mobileMenuOpen && <div className="sidebar-overlay" onClick={() => setMobileMenuOpen(false)}></div>}
+      {mobileMenuOpen && <div className="sidebar-overlay" onClick={() => setMobileMenuOpen(false)} />}
 
-      {/* MAIN */}
+      {/* Main Content */}
       <main className="main-content">
-        {/* Mobile Header */}
-        <header className="mobile-header">
-          <a href="/" className="mobile-brand">
-            <img src="/logo_g12.svg" alt="G12" />
-            <span>G12 LABS</span>
-          </a>
-          <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
-            <i className={`ph ${mobileMenuOpen ? 'ph-x' : 'ph-list'}`}></i>
-          </button>
-        </header>
-
-        {/* Top Bar */}
+        {/* Topbar */}
         <header className="topbar">
-          <div className="breadcrumbs">
-            Dashboard <span style={{ margin: '0 6px' }}>/</span> 
-            <span>{activePanel === 'overview' ? 'Overview' : activePanel === 'buy-sell' ? 'Buy / Sell' : activePanel === 'transactions' ? 'Transactions' : 'Settings'}</span>
-          </div>
-          <div className="topbar-right">
-            <div className="refresh-btn" onClick={() => { loadData(); fetchWalletData(); fetchChartData(); }} title="Refresh Data">
-              <i className="ph ph-arrows-clockwise"></i>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+              <i className="ph ph-list"></i>
+            </button>
+            <div className="breadcrumbs">
+              Dashboard / 
+              <span>
+                {activePanel === 'overview' ? 'Overview' : activePanel === 'buy-sell' ? 'Buy / Sell' : activePanel === 'transactions' ? 'Transactions' : 'Settings'}
+              </span>
             </div>
+          </div>
+
+          <div className="topbar-right">
+            {/* Network Indicator + Switcher */}
+            <div className="network-dropdown" style={{ position: 'relative' }}>
+              <button 
+                className="network-btn"
+                onClick={() => setNetworkDropdownOpen(!networkDropdownOpen)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '6px 12px',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  fontWeight: '500',
+                  color: 'var(--text-main)'
+                }}
+              >
+                <div style={{ 
+                  width: '8px', 
+                  height: '8px', 
+                  borderRadius: '50%', 
+                  background: currentChainKey === 'arb' ? '#E85A04' : currentChainKey === 'base' ? '#0052FF' : '#888'
+                }} />
+                {currentChainKey === 'arb' ? 'Arbitrum' : currentChainKey === 'base' ? 'Base' : 'Not Connected'}
+                <i className="ph ph-caret-down"></i>
+              </button>
+              
+              {networkDropdownOpen && (
+                <>
+                  <div 
+                    style={{ position: 'fixed', inset: 0, zIndex: 49 }} 
+                    onClick={() => setNetworkDropdownOpen(false)} 
+                  />
+                  <div 
+                    className="network-dropdown-menu"
+                    style={{
+                      position: 'absolute',
+                      top: '100%',
+                      right: 0,
+                      marginTop: '8px',
+                      background: 'var(--bg-sidebar)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '12px',
+                      padding: '8px',
+                      minWidth: '160px',
+                      zIndex: 50,
+                      boxShadow: 'var(--shadow-card)'
+                    }}
+                  >
+                    <button
+                      onClick={async () => {
+                        await switchChain(arbitrum);
+                        setNetworkDropdownOpen(false);
+                      }}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '8px 12px',
+                        background: currentChainKey === 'arb' ? 'var(--bg-card)' : 'transparent',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: 'var(--text-main)',
+                        textAlign: 'left',
+                        transition: '0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-card)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = currentChainKey === 'arb' ? 'var(--bg-card)' : 'transparent'}
+                    >
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#E85A04' }} />
+                      Arbitrum
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await switchChain(base);
+                        setNetworkDropdownOpen(false);
+                      }}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '8px 12px',
+                        background: currentChainKey === 'base' ? 'var(--bg-card)' : 'transparent',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: 'var(--text-main)',
+                        textAlign: 'left',
+                        transition: '0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-card)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = currentChainKey === 'base' ? 'var(--bg-card)' : 'transparent'}
+                    >
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#0052FF' }} />
+                      Base
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <button className="refresh-btn" onClick={fetchVaults}>
+              <i className="ph ph-arrows-clockwise"></i>
+            </button>
 
             <div className={`theme-toggle ${theme}`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
               <div className="toggle-thumb">{theme === 'dark' ? '🌙' : '☀️'}</div>
@@ -613,6 +907,51 @@ function Dashboard({ address }) {
           <div className={`notification ${notification.type}`}>
             <i className={`ph ${notification.type === 'success' ? 'ph-check-circle' : notification.type === 'error' ? 'ph-x-circle' : 'ph-info'}`}></i>
             <span>{notification.message}</span>
+            {notification.txHash && notification.network && (
+              <a 
+                href={`https://${notification.network === 'base' ? 'basescan.org' : 'arbiscan.io'}/tx/${notification.txHash}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ marginLeft: '8px', color: 'inherit', textDecoration: 'underline' }}
+              >
+                View TX
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* Pending Transactions Banner */}
+        {pendingTxs.length > 0 && (
+          <div style={{
+            margin: '20px 40px 0',
+            padding: '16px',
+            background: 'var(--warning-bg)',
+            border: '1px solid var(--warning)',
+            borderRadius: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            color: 'var(--warning)'
+          }}>
+            <i className="ph ph-clock" style={{ fontSize: '20px' }}></i>
+            <div style={{ flex: 1 }}>
+              <strong style={{ color: 'var(--text-main)' }}>Transactions Pending</strong>
+              <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                {pendingTxs.length} transaction{pendingTxs.length > 1 ? 's' : ''} being indexed. This may take up to 10 minutes.
+              </div>
+            </div>
+            <button 
+              onClick={() => setPendingTxs([])}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                padding: '4px'
+              }}
+            >
+              <i className="ph ph-x"></i>
+            </button>
           </div>
         )}
 
@@ -623,71 +962,77 @@ function Dashboard({ address }) {
               <div className="row-top">
                 {/* Portfolio Card */}
                 <div className="glass-card portfolio-card">
-                  <div className="p-header">
-                    <h2>Total Portfolio</h2>
-                    <div className="p-balance mono">{fmtUsd(totalBalance)}</div>
-                    <div className={`p-change ${pnlUsd >= 0 ? 'positive' : 'negative'}`}>
-                      <i className={`ph ${pnlUsd >= 0 ? 'ph-trend-up' : 'ph-trend-down'}`}></i>
-                      {fmtUsd(Math.abs(pnlUsd))} ({fmtPercent(pnlPercent)})
-                      <span className="pnl-period">({chartRange})</span>
+                  {loading ? (
+                    <div style={{ padding: '20px' }}>
+                      <Skeleton width="120px" height="14px" />
+                      <div style={{ marginTop: '12px' }}><Skeleton width="180px" height="32px" /></div>
+                      <div style={{ marginTop: '8px' }}><Skeleton width="140px" height="16px" /></div>
+                      <div style={{ marginTop: '40px', height: '180px', background: 'var(--bg-card)' }} />
                     </div>
-                  </div>
-
-                  {/* Time Range Selector */}
-                  <div className="chart-range-btns top-range">
-                    {['1D', '1W', '1M', 'ALL'].map(r => (
-                      <button 
-                        key={r} 
-                        className={`range-btn ${chartRange === r ? 'active' : ''}`} 
-                        onClick={() => setChartRange(r)}
-                      >
-                        {r}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Chart */}
-                  <div style={{ width: '100%', height: '180px', marginTop: '16px' }}>
-                    {loading ? (
-                      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
-                        <i className="ph ph-spinner spinning" style={{ marginRight: '8px' }}></i>
-                        Loading chart data...
+                  ) : (
+                    <>
+                      <div className="p-header">
+                        <h2>Total Portfolio</h2>
+                        <div className="p-balance mono">{fmtUsd(totalBalance)}</div>
+                        <div className={`p-change ${pnlUsd >= 0 ? 'positive' : 'negative'}`}>
+                          <i className={`ph ${pnlUsd >= 0 ? 'ph-trend-up' : 'ph-trend-down'}`}></i>
+                          {fmtUsd(Math.abs(pnlUsd))} ({fmtPercent(pnlPercent)})
+                          <span className="pnl-period">({chartRange})</span>
+                        </div>
                       </div>
-                    ) : portfolioChart.length > 0 ? (
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={portfolioChart}>
-                          <defs>
-                            <linearGradient id="colorPortfolio" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#E85A04" stopOpacity={0.3} />
-                              <stop offset="95%" stopColor="#E85A04" stopOpacity={0} />
-                            </linearGradient>
-                          </defs>
-                          <XAxis dataKey="date" hide />
-                          <YAxis hide domain={['auto', 'auto']} />
-                          <Tooltip
-                            contentStyle={{ backgroundColor: 'var(--bg-root)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--text-main)' }}
-                            itemStyle={{ color: 'var(--text-main)' }}
-                            formatter={(value) => [fmtUsd(value), 'Portfolio Value']}
-                            labelFormatter={(label) => label}
-                          />
-                          <Area
-                            type="monotone"
-                            dataKey="value"
-                            stroke="#E85A04"
-                            strokeWidth={2}
-                            fillOpacity={1}
-                            fill="url(#colorPortfolio)"
-                            isAnimationActive={false}
-                          />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    ) : (
-                      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
-                        <i className="ph ph-chart-line" style={{ marginRight: '8px', fontSize: '18px' }}></i>
-                        No chart data available yet
+
+                      {/* Time Range Selector */}
+                      <div className="chart-range-btns top-range">
+                        {['1D', '1W', '1M', 'ALL'].map(r => (
+                          <button 
+                            key={r} 
+                            className={`range-btn ${chartRange === r ? 'active' : ''}`} 
+                            onClick={() => setChartRange(r)}
+                          >
+                            {r}
+                          </button>
+                        ))}
                       </div>
-                    )}
-                  </div>
+
+                      {/* Chart */}
+                      <div style={{ width: '100%', height: '180px', marginTop: '16px' }}>
+                        {portfolioChart.length > 0 ? (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={portfolioChart}>
+                              <defs>
+                                <linearGradient id="colorPortfolio" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="5%" stopColor="#E85A04" stopOpacity={0.3} />
+                                  <stop offset="95%" stopColor="#E85A04" stopOpacity={0} />
+                                </linearGradient>
+                              </defs>
+                              <XAxis dataKey="date" hide />
+                              <YAxis hide domain={['auto', 'auto']} />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: 'var(--bg-root)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--text-main)' }}
+                                itemStyle={{ color: 'var(--text-main)' }}
+                                formatter={(value) => [fmtUsd(value), 'Portfolio Value']}
+                                labelFormatter={(label) => label}
+                              />
+                              <Area
+                                type="monotone"
+                                dataKey="value"
+                                stroke="#E85A04"
+                                strokeWidth={2}
+                                fillOpacity={1}
+                                fill="url(#colorPortfolio)"
+                                isAnimationActive={false}
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+                            <i className="ph ph-chart-line" style={{ marginRight: '8px', fontSize: '18px' }}></i>
+                            Your portfolio history will appear here after your first deposit
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Actions Card */}
@@ -697,219 +1042,216 @@ function Dashboard({ address }) {
                       <div className="av-label">Wallet Balance</div>
                       <div className="av-val mono" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <img src="/usd-coin-usdc-logo.png" width="24" height="24" alt="USDC" />
-                        {fmtUsd(walletUsdc)}
+                        {loading ? <Skeleton width="100px" height="24px" /> : fmtUsd(walletUsdc)}
                       </div>
                     </div>
-                    {walletSummary && (
-                      <div style={{ textAlign: 'right' }}>
-                        <div className="av-label">Net Invested</div>
-                        <div className="av-val mono" style={{ fontSize: '16px' }}>{fmtUsd(walletSummary.net_invested)}</div>
-                      </div>
-                    )}
                   </div>
-                  <div className="action-btns">
-                    <button className="act-btn primary" onClick={() => setDepositModal({ open: true, vault: 'arb' })}>
-                      <i className="ph ph-arrow-down"></i> Deposit
+
+                  <div className="quick-actions">
+                    <button className="action-btn primary" onClick={() => setDepositModal({ open: true, vault: currentChainKey || 'arb' })}>
+                      <i className="ph ph-arrow-down"></i>
+                      <span>Deposit USDC</span>
                     </button>
-                    <button className="act-btn" onClick={() => setRedeemModal({ open: true, vault: 'arb' })}>
-                      <i className="ph ph-arrow-up"></i> Withdraw
+                    <button className="action-btn" onClick={() => setRedeemModal({ open: true, vault: currentChainKey || 'arb' })}>
+                      <i className="ph ph-arrow-up"></i>
+                      <span>Withdraw</span>
                     </button>
                   </div>
-                </div>
-              </div>
 
-              <div className="row-bottom">
-                {/* Positions */}
-                <div className="section-col">
-                  <div className="section-title"><i className="ph ph-wallet"></i> Your Positions</div>
-                  {totalBalance > 0 ? (
-                    <div className="positions-list">
-                      {Object.entries(ENZYME_VAULTS).map(([key, vault]) => {
-                        const positionValue = getUserVaultValue(key);
-                        if (positionValue <= 0) return null;
-                        return (
-                          <div className="pos-item" key={key} onClick={() => setActivePanel('buy-sell')}>
-                            <div className="pos-main">
-                              <img src={vault.icon} className="pos-icon" alt={vault.name} />
-                              <div className="pos-info">
-                                <h4>{vault.name}</h4>
-                                <span>{vault.network}</span>
-                              </div>
-                            </div>
-                            <div className="pos-stats">
-                              <div className="pos-stat-grp">
-                                <label>APY</label>
-                                <span className="pos-apy">{vaultData[key] ? fmtPercent(vaultData[key].monthly_return * 12) : '—'}</span>
-                              </div>
-                              <div className="pos-stat-grp">
-                                <label>Balance</label>
-                                <span className="mono">{fmtUsd(positionValue)}</span>
-                              </div>
-                              {hasPendingRedemption(key) && (
-                                <div className="pos-stat-grp">
-                                  <label>Status</label>
-                                  <span className="pending-badge">
-                                    <i className="ph ph-clock"></i>
-                                    {isRedemptionReady(key) ? 'Ready' : formatCountdown(countdowns[key])}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
+                  <div className="recent-activity">
+                    <div className="ra-header">
+                      <i className="ph ph-clock-counter-clockwise"></i>
+                      <span>Recent Activity</span>
                     </div>
-                  ) : (
-                    <div className="empty-box">
-                      <i className="ph ph-safe"></i>
-                      <p>No active positions. Deploy capital to start generating yield.</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Recent Activity */}
-                <div className="section-col">
-                  <div className="section-title"><i className="ph ph-clock-counter-clockwise"></i> Recent Activity</div>
-                  <div className="glass-card" style={{ padding: '0', minHeight: '200px' }}>
-                    {transactions.length > 0 ? (
-                      <div className="tx-list">
-                        {transactions.slice(0, 5).map((tx, i) => (
-                          <div key={i} className="tx-item">
-                            <div className="tx-icon" style={{ background: tx.type === 'DEPOSIT' ? 'var(--success-bg)' : 'var(--error-bg)', color: tx.type === 'DEPOSIT' ? 'var(--success)' : 'var(--error)' }}>
-                              <i className={`ph ${tx.type === 'DEPOSIT' ? 'ph-arrow-down' : 'ph-arrow-up'}`}></i>
-                            </div>
-                            <div className="tx-details">
-                              <div className="tx-type">{tx.type === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'}</div>
-                              <div className="tx-meta">{tx.vault} • {formatDate(tx.timestamp)}</div>
-                            </div>
-                            <div className={`tx-amount ${tx.type === 'DEPOSIT' ? 'positive' : 'negative'}`}>
-                              {tx.type === 'DEPOSIT' ? '+' : '-'}{fmtUsd(tx.amount_usd)}
-                            </div>
+                    {loading ? (
+                      <>
+                        <Skeleton width="100%" height="60px" />
+                        <Skeleton width="100%" height="60px" />
+                      </>
+                    ) : transactions.slice(0, 3).length > 0 ? (
+                      transactions.slice(0, 3).map((tx, i) => (
+                        <div key={i} className="activity-item">
+                          <div className={`ai-icon ${tx.type === 'DEPOSIT' ? 'deposit' : 'withdraw'}`}>
+                            <i className={`ph ${tx.type === 'DEPOSIT' ? 'ph-arrow-down' : 'ph-arrow-up'}`}></i>
                           </div>
-                        ))}
-                        {transactions.length > 5 && (
-                          <div className="tx-more" onClick={() => setActivePanel('transactions')}>
-                            View all transactions →
+                          <div className="ai-details">
+                            <div className="ai-title">{tx.type === 'DEPOSIT' ? 'Deposit' : 'Withdraw'}</div>
+                            <div className="ai-subtitle">{tx.vault} • {formatDate(tx.timestamp)}</div>
                           </div>
-                        )}
-                      </div>
+                          <div className={`ai-amount mono ${tx.type === 'DEPOSIT' ? 'positive' : 'negative'}`}>
+                            {tx.type === 'DEPOSIT' ? '+' : '-'}{fmtUsd(tx.amount_usd)}
+                          </div>
+                        </div>
+                      ))
                     ) : (
-                      <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                        <i className="ph ph-scroll" style={{ fontSize: '24px', marginBottom: '10px', opacity: 0.5 }}></i>
+                      <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+                        <i className="ph ph-scroll" style={{ fontSize: '24px', display: 'block', marginBottom: '8px', opacity: 0.5 }}></i>
                         No transactions yet
                       </div>
                     )}
                   </div>
                 </div>
               </div>
+
+              {/* Vaults Row */}
+              <div className="row-bottom">
+                {Object.entries(ENZYME_VAULTS).map(([key, vault]) => {
+                  const data = vaultData[key];
+                  const userShares = Number(userVaultBalances[key]) / 1e18;
+                  const userValue = userShares * (data?.share_price || 0);
+                  const pending = pendingRedemptions[key];
+
+                  return (
+                    <div key={key} className="glass-card vault-card">
+                      <div className="vc-header">
+                        <div className="vc-icon-wrapper">
+                          <img src={vault.icon} alt={vault.name} className="vc-icon" />
+                        </div>
+                        <div className="vc-title">
+                          <h3>{vault.name}</h3>
+                          <span className="vc-network">{vault.network}</span>
+                        </div>
+                      </div>
+
+                      {loading ? (
+                        <div style={{ padding: '20px 0' }}>
+                          <Skeleton width="100%" height="60px" />
+                          <div style={{ marginTop: '16px' }}><Skeleton width="100%" height="40px" /></div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="vc-stats">
+                            <div className="vc-stat">
+                              <span className="label">Share Price</span>
+                              <span className="value mono">{fmtSharePrice(data?.share_price)}</span>
+                            </div>
+                            <div className="vc-stat">
+                              <span className="label">Net APY</span>
+                              <span className={`value apy-badge ${(data?.monthly_return || 0) >= 0 ? 'positive' : 'negative'}`}>
+                                {fmtPercent(data?.monthly_return)}
+                              </span>
+                            </div>
+                            <div className="vc-stat">
+                              <span className="label">Your Balance</span>
+                              <span className="value mono">{fmtUsd(userValue)}</span>
+                            </div>
+                            <div className="vc-stat">
+                              <span className="label">Your Shares</span>
+                              <span className="value mono">{userShares.toFixed(4)}</span>
+                            </div>
+                          </div>
+
+                          {pending && (
+                            <div className={`pending-banner ${isRedemptionReady(key) ? 'ready' : 'waiting'}`}>
+                              <i className="ph ph-clock"></i>
+                              <span>
+                                {isRedemptionReady(key) 
+                                  ? 'Redemption Ready!' 
+                                  : `Unlocks in ${formatCountdown(countdowns[key])}`
+                                }
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="vc-actions">
+                            <button className="btn btn-primary" onClick={() => setDepositModal({ open: true, vault: key })}>
+                              <i className="ph ph-plus"></i> Deposit
+                            </button>
+                            <button className="btn btn-secondary" onClick={() => setRedeemModal({ open: true, vault: key })}>
+                              <i className="ph ph-minus"></i> Redeem
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </>
           )}
 
-          {/* ========== BUY / SELL PANEL ========== */}
+          {/* ========== BUY/SELL PANEL ========== */}
           {activePanel === 'buy-sell' && (
             <div className="vault-grid">
-              {Object.entries(ENZYME_VAULTS).map(([key, vault]) => (
-                <div className="vault-card" key={key}>
-                  <div className="vc-header">
-                    <div className="vc-title">
-                      <img src={vault.icon} width="32" alt={vault.name} />
-                      {vault.name}
+              {Object.entries(ENZYME_VAULTS).map(([key, vault]) => {
+                const data = vaultData[key];
+                const userShares = Number(userVaultBalances[key]) / 1e18;
+                const userValue = userShares * (data?.share_price || 0);
+                const pending = pendingRedemptions[key];
+
+                return (
+                  <div key={key} className="glass-card vault-card-large">
+                    <div className="vc-header">
+                      <div className="vc-icon-wrapper">
+                        <img src={vault.icon} alt={vault.name} className="vc-icon" />
+                      </div>
+                      <div className="vc-title">
+                        <h3>{vault.name}</h3>
+                        <span className="vc-network">{vault.network}</span>
+                      </div>
+                      <a href={vault.enzymeUrl} target="_blank" rel="noreferrer" className="enzyme-link">
+                        <i className="ph ph-arrow-square-out"></i>
+                      </a>
                     </div>
-                    <div className="vc-badges">
-                      <span className="badge">{vault.network}</span>
-                      {hasPendingRedemption(key) && (
-                        <span className="badge warning">
-                          <i className="ph ph-clock"></i>
-                          {isRedemptionReady(key) ? 'Ready' : formatCountdown(countdowns[key])}
+
+                    <div className="vc-stats-grid">
+                      <div className="vc-stat">
+                        <span className="label">Share Price</span>
+                        <span className="value mono">{fmtSharePrice(data?.share_price)}</span>
+                      </div>
+                      <div className="vc-stat">
+                        <span className="label">AUM</span>
+                        <span className="value mono">{fmtUsd(data?.aum)}</span>
+                      </div>
+                      <div className="vc-stat">
+                        <span className="label">Net APY</span>
+                        <span className={`value apy-badge ${(data?.monthly_return || 0) >= 0 ? 'positive' : 'negative'}`}>
+                          {fmtPercent(data?.monthly_return)}
                         </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="vc-stats">
-                    <div className="vc-stat">
-                      <label>Share Price</label>
-                      <span className="mono">{fmtSharePrice(vaultData[key]?.share_price)}</span>
-                    </div>
-                    <div className="vc-stat">
-                      <label>Net APY</label>
-                      <span style={{ color: 'var(--success)' }}>{vaultData[key] ? fmtPercent(vaultData[key].monthly_return * 12) : '—'}</span>
-                    </div>
-                    <div className="vc-stat">
-                      <label>Your Balance</label>
-                      <span className="mono">{fmtUsd(getUserVaultValue(key))}</span>
-                    </div>
-                    <div className="vc-stat">
-                      <label>Your Shares</label>
-                      <span className="mono">{(Number(userVaultBalances[key]) / 1e18).toFixed(4)}</span>
-                    </div>
-                    <div className="vc-stat">
-                      <label>Total AUM</label>
-                      <span className="mono">{fmtUsd(vaultData[key]?.aum)}</span>
-                    </div>
-                    <div className="vc-stat">
-                      <label>Depositors</label>
-                      <span>{vaultData[key]?.depositors ?? '—'}</span>
-                    </div>
-                  </div>
-
-                  {hasPendingRedemption(key) && (
-                    <div className={`redemption-status ${isRedemptionReady(key) ? 'ready' : 'pending'}`}>
-                      <div className="status-header">
-                        <i className={`ph ${isRedemptionReady(key) ? 'ph-check-circle' : 'ph-clock'}`}></i>
-                        <span>{isRedemptionReady(key) ? 'Withdrawal Ready!' : 'Pending Redemption'}</span>
                       </div>
-                      <div className="status-details">
-                        <div className="detail">
-                          <span>Shares:</span>
-                          <strong>{pendingRedemptions[key]?.shares_amount.toFixed(4)}</strong>
-                        </div>
-                        <div className="detail">
-                          <span>Est. Value:</span>
-                          <strong>{fmtUsd(pendingRedemptions[key]?.estimated_usdc_value)}</strong>
-                        </div>
-                        {!isRedemptionReady(key) && (
-                          <div className="detail">
-                            <span>Time Left:</span>
-                            <strong className="countdown">{formatCountdown(countdowns[key])}</strong>
-                          </div>
-                        )}
+                      <div className="vc-stat">
+                        <span className="label">Depositors</span>
+                        <span className="value">{data?.depositors || '—'}</span>
+                      </div>
+                      <div className="vc-stat">
+                        <span className="label">Your Balance</span>
+                        <span className="value mono">{fmtUsd(userValue)}</span>
+                      </div>
+                      <div className="vc-stat">
+                        <span className="label">Your Shares</span>
+                        <span className="value mono">{userShares.toFixed(6)}</span>
                       </div>
                     </div>
-                  )}
 
-                  <div className="vc-actions">
-                    <button className="btn btn-primary" onClick={() => setDepositModal({ open: true, vault: key })}>
-                      <i className="ph ph-plus"></i> Deposit
-                    </button>
-                    {hasPendingRedemption(key) ? (
-                      isRedemptionReady(key) ? (
-                        <button className="btn btn-success" onClick={() => setRedeemModal({ open: true, vault: key })}>
-                          <i className="ph ph-check"></i> Complete Withdrawal
-                        </button>
-                      ) : (
-                        <button className="btn btn-warning" onClick={() => cancelRedemption(key)}>
-                          <i className="ph ph-x"></i> Cancel Request
-                        </button>
-                      )
-                    ) : (
-                      <button className="btn btn-secondary" onClick={() => setRedeemModal({ open: true, vault: key })}>
-                        <i className="ph ph-minus"></i> Redeem
-                      </button>
+                    {pending && (
+                      <div className={`pending-banner ${isRedemptionReady(key) ? 'ready' : 'waiting'}`}>
+                        <i className="ph ph-clock"></i>
+                        <span>
+                          {isRedemptionReady(key) 
+                            ? 'Redemption Ready - Click Redeem to complete' 
+                            : `Redemption unlocks in ${formatCountdown(countdowns[key])}`
+                          }
+                        </span>
+                      </div>
                     )}
-                  </div>
 
-                  <a href={vault.enzymeUrl} target="_blank" rel="noreferrer" className="vault-link">
-                    <i className="ph ph-arrow-square-out"></i> View on Enzyme Finance
-                  </a>
-                </div>
-              ))}
+                    <div className="vc-actions">
+                      <button className="btn btn-primary btn-lg" onClick={() => setDepositModal({ open: true, vault: key })}>
+                        <i className="ph ph-arrow-down"></i> Deposit USDC
+                      </button>
+                      <button className="btn btn-secondary btn-lg" onClick={() => setRedeemModal({ open: true, vault: key })}>
+                        <i className="ph ph-arrow-up"></i> Redeem Shares
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
           {/* ========== TRANSACTIONS PANEL ========== */}
           {activePanel === 'transactions' && (
-            <div className="glass-card" style={{ padding: 0 }}>
+            <div className="glass-card" style={{ padding: 0, overflowX: 'auto' }}>
               <table className="full-tx-table">
                 <thead>
                   <tr>
@@ -952,7 +1294,7 @@ function Dashboard({ address }) {
                     <tr>
                       <td colSpan="5" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
                         <i className="ph ph-scroll" style={{ fontSize: '32px', marginBottom: '12px', display: 'block', opacity: 0.5 }}></i>
-                        No transaction history available
+                        No transactions yet. Make your first deposit to get started!
                       </td>
                     </tr>
                   )}
@@ -973,7 +1315,7 @@ function Dashboard({ address }) {
                   <span className="setting-label">Connected Address</span>
                   <div className="setting-value-row">
                     <code className="address-full">{address}</code>
-                    <button className="btn btn-ghost btn-sm" onClick={() => { navigator.clipboard.writeText(address); showNotification('Address copied!', 'success'); }}>
+                    <button className="copy-btn" onClick={() => { navigator.clipboard.writeText(address); showNotification('Address copied!', 'success'); }}>
                       <i className="ph ph-copy"></i>
                     </button>
                   </div>
@@ -997,6 +1339,12 @@ function Dashboard({ address }) {
                       <span className="setting-value">{fmtUsd(walletSummary.total_withdrawn)}</span>
                     </div>
                     <div className="setting-item">
+                      <span className="setting-label">Net Invested</span>
+                      <span className="setting-value mono" style={{ fontWeight: 600, color: 'var(--magma-core)' }}>
+                        {fmtUsd(walletSummary.net_invested)}
+                      </span>
+                    </div>
+                    <div className="setting-item">
                       <span className="setting-label">All-Time P&L</span>
                       <span className={`setting-value ${walletSummary.pnl_usd >= 0 ? 'positive' : 'negative'}`}>
                         {fmtUsd(walletSummary.pnl_usd)} ({fmtPercent(walletSummary.pnl_percent)})
@@ -1008,43 +1356,6 @@ function Dashboard({ address }) {
                   <i className="ph ph-sign-out"></i> Disconnect Wallet
                 </button>
               </div>
-
-              <div className="glass-card settings-card">
-                <div className="settings-header">
-                  <i className="ph ph-clock"></i>
-                  <h3>Redemption Policy</h3>
-                </div>
-                <div className="info-callout">
-                  <i className="ph ph-info"></i>
-                  <p>To ensure sufficient liquidity for all investors, redemptions require a <strong>{formatCooldownDisplay()}</strong> waiting period after submitting a request.</p>
-                </div>
-                <div className="setting-item">
-                  <span className="setting-label">Current Cooldown Period</span>
-                  <span className="setting-value">{formatCooldownDisplay()}</span>
-                </div>
-              </div>
-
-              <div className="glass-card settings-card">
-                <div className="settings-header">
-                  <i className="ph ph-link"></i>
-                  <h3>Quick Links</h3>
-                </div>
-                <a href="https://widget.mtpelerin.com/?type=web&lang=en&tab=buy&bdc=USDC&net=ARBITRUM&amt=500&cur=EUR" target="_blank" rel="noreferrer" className="quick-link">
-                  <i className="ph ph-credit-card"></i>
-                  <span>Buy USDC (Arbitrum)</span>
-                  <i className="ph ph-arrow-square-out"></i>
-                </a>
-                <a href="https://widget.mtpelerin.com/?type=web&lang=en&tab=buy&bdc=USDC&net=BASE&amt=500&cur=EUR" target="_blank" rel="noreferrer" className="quick-link">
-                  <i className="ph ph-credit-card"></i>
-                  <span>Buy USDC (Base)</span>
-                  <i className="ph ph-arrow-square-out"></i>
-                </a>
-                <a href="/strategies.html" className="quick-link">
-                  <i className="ph ph-chart-line-up"></i>
-                  <span>View Strategies</span>
-                  <i className="ph ph-arrow-right"></i>
-                </a>
-              </div>
             </div>
           )}
         </div>
@@ -1052,17 +1363,17 @@ function Dashboard({ address }) {
 
       {/* ========== DEPOSIT MODAL ========== */}
       {depositModal.open && (
-        <div className="modal-overlay" onClick={() => setDepositModal({ open: false, vault: 'arb' })}>
+        <div className="modal-overlay" onClick={() => { setDepositModal({ open: false, vault: 'arb' }); setGasEstimate(null); }}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <div className="modal-icon" style={{ background: ENZYME_VAULTS[depositModal.vault].color + '20', color: ENZYME_VAULTS[depositModal.vault].color }}>
-                <i className="ph ph-plus"></i>
+              <div className="modal-icon" style={{ background: '#10B98120', color: '#10B981' }}>
+                <i className="ph ph-arrow-down"></i>
               </div>
               <div>
                 <div className="modal-title">Deposit USDC</div>
-                <div className="modal-subtitle">Add funds to {ENZYME_VAULTS[depositModal.vault].name}</div>
+                <div className="modal-subtitle">Add funds to start earning yield</div>
               </div>
-              <button className="close-btn" onClick={() => setDepositModal({ open: false, vault: 'arb' })}>
+              <button className="close-btn" onClick={() => { setDepositModal({ open: false, vault: 'arb' }); setGasEstimate(null); }}>
                 <i className="ph ph-x"></i>
               </button>
             </div>
@@ -1099,12 +1410,27 @@ function Dashboard({ address }) {
                 </div>
                 <div className="input-helper">
                   Balance: {(Number(userUsdcBalances[depositModal.vault]) / 1e6).toFixed(2)} USDC
+                  {gasEstimate && (
+                    <span style={{ marginLeft: '12px', color: 'var(--text-muted)' }}>
+                      • Est. gas: ~${gasEstimate.toFixed(2)}
+                    </span>
+                  )}
                 </div>
               </div>
+
+              {depositModal.vault !== currentChainKey && currentChainKey && (
+                <div className="info-callout warning">
+                  <i className="ph ph-warning"></i>
+                  <div>
+                    <strong>Network Switch Required</strong>
+                    <p>You'll be prompted to switch from {currentChainKey === 'arb' ? 'Arbitrum' : 'Base'} to {ENZYME_VAULTS[depositModal.vault].network}</p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setDepositModal({ open: false, vault: 'arb' })}>Cancel</button>
+              <button className="btn btn-secondary" onClick={() => { setDepositModal({ open: false, vault: 'arb' }); setGasEstimate(null); }}>Cancel</button>
               <button className="btn btn-primary" onClick={handleDeposit} disabled={isProcessing}>
                 {isProcessing ? <><i className="ph ph-spinner spinning"></i> Processing...</> : <><i className="ph ph-check"></i> Confirm Deposit</>}
               </button>
@@ -1147,6 +1473,21 @@ function Dashboard({ address }) {
                       <div className="countdown-display">
                         <span className="countdown-label">Time remaining</span>
                         <span className="countdown-value">{formatCountdown(countdowns[redeemModal.vault])}</span>
+                        <div style={{ 
+                          width: '100%', 
+                          height: '4px', 
+                          background: 'var(--bg-root)', 
+                          borderRadius: '2px', 
+                          overflow: 'hidden',
+                          marginTop: '8px'
+                        }}>
+                          <div style={{
+                            width: `${Math.max(0, Math.min(100, ((cooldownSeconds * 1000 - (countdowns[redeemModal.vault] || 0)) / (cooldownSeconds * 1000)) * 100))}%`,
+                            height: '100%',
+                            background: 'var(--warning)',
+                            transition: 'width 1s linear'
+                          }} />
+                        </div>
                       </div>
                     </>
                   )}
@@ -1236,6 +1577,20 @@ function Dashboard({ address }) {
           </div>
         </div>
       )}
+
+      <style>{`
+        @keyframes shimmer {
+          0% { background-position: -200% 0; }
+          100% { background-position: 200% 0; }
+        }
+        .spinning {
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
