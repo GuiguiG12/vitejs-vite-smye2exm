@@ -668,7 +668,14 @@ function Dashboard({ address }) {
                             contentStyle={{ backgroundColor: 'var(--bg-root)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--text-main)' }}
                             itemStyle={{ color: 'var(--text-main)' }}
                             formatter={(value) => [fmtUsd(value), 'Portfolio Value']}
-                            labelFormatter={(label) => label}
+                            labelFormatter={(label, payload) => {
+                              if (payload && payload[0] && payload[0].payload.timestamp) {
+                                const date = new Date(payload[0].payload.timestamp);
+                                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' at ' + 
+                                       date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                              }
+                              return label;
+                            }}
                           />
                           <Area
                             type="monotone"
@@ -703,7 +710,7 @@ function Dashboard({ address }) {
                     {walletSummary && (
                       <div style={{ textAlign: 'right' }}>
                         <div className="av-label">Net Invested</div>
-                        <div className="av-val mono" style={{ fontSize: '16px' }}>{fmtUsd(walletSummary.net_invested)}</div>
+                        <div className="av-val mono">{fmtUsd(walletSummary.net_invested)}</div>
                       </div>
                     )}
                   </div>
